@@ -1,0 +1,84 @@
+from typing import Callable, Dict, List, Union
+
+from gym.envs.mujoco import MujocoEnv
+import jax
+import jax.numpy as jnp
+
+from mbrl.misc import FullyConnectedNeuralNet
+from mbrl._src.utils import Array
+
+
+class NeuralNetPolicy:
+    def __init__(
+        self,
+        name: str,
+        env: MujocoEnv,
+        dummy_obs: Array,
+        hidden_dims: List[int],
+        hidden_activations: Union[None, Callable[[Array], Array], List[Union[None, Callable[[Array], Array]]]],
+        obs_preproc: Callable[[Array], Array] = lambda obs: obs,
+    ):
+        """Creates a policy network.
+
+        Args:
+            name: Model name. Used for referencing parameters, so must be unique.
+            env: Environment. Used for inferring shapes and action bounds.
+            dummy_obs: Observation from the environment, used for inferring shapes.
+            hidden_dims: List of hidden dimensions for internal network.
+            hidden_activations: A single activation type to use for every hidden layer,
+                OR a list of activations to use for each hidden layer specified in hidden dims.
+            obs_preproc: Preprocesses observations before feeding into the network.
+                Defaults to identity operation.
+        """
+        self._name = name
+        self._action_bounds = (env.action_space.low, env.action_space.high)
+        self._obs_preproc = obs_preproc
+
+        preproc_obs_dim = self._obs_preproc(dummy_obs).shape[0]
+        action_dim = env.action_space.shape[0]
+
+        def convert_to_actions(query):
+            box_center = (self._action_bounds[0] + self._action_bounds[1]) / 2
+            box_width = (self._action_bounds[1] - self._action_bounds[0]) / 2
+            return box_center + box_width * jnp.tanh(query)
+
+        self._internal_net = FullyConnectedNeuralNet(
+            name="{}_internal".format(self._name),
+            input_dim=preproc_obs_dim,
+            output_dim=action_dim,
+            hidden_dims=hidden_dims,
+            hidden_activations=hidden_activations,
+            output_activation=convert_to_actions
+        )
+
+    def init(
+        self,
+        params: Dict,
+        rng_key: jax.random.KeyArray
+    ) -> Dict:
+        """Randomly initializes policy parameters, places them within the given parameter dictionary, and returns it.
+
+        Args:
+            params: Dictionary of parameters where initialization will be placed.
+            rng_key: JAX RNG key, which should not be reused outside this function.
+
+        Returns:
+            params
+        """
+        return self._internal_net.init(params, rng_key)
+
+    def act(
+        self,
+        params,
+        obs
+    ) -> jnp.ndarray:
+        """Returns the action of the policy on a SINGLE observation.
+
+        Args:
+            params: Dictionary of parameters.
+            obs: Environment observation.
+
+        Returns:
+            The action taken by the policy on the given observation.
+        """
+        return self._internal_net.forward(params, self._obs_preproc(obs))

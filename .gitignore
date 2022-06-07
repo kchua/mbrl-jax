@@ -1,0 +1,3 @@
+.idea
+*.pyc
+docker/display_init

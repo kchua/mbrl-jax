@@ -1,0 +1,8 @@
+services:
+  experiments:
+    image: mbrl-jax
+    runtime: nvidia
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    tty: true
+    stdin_open: true
