@@ -26,7 +26,7 @@ class NeuralNetPolicy:
             dummy_obs: Observation from the environment, used for inferring shapes.
             hidden_dims: List of hidden dimensions for internal network.
             hidden_activations: A single activation type to use for every hidden layer,
-                OR a list of activations to use for each hidden layer specified in hidden dims.
+                OR a list of activations to use for each hidden layer specified in hidden_dims.
             obs_preproc: Preprocesses observations before feeding into the network.
                 Defaults to identity operation.
         """
@@ -69,8 +69,8 @@ class NeuralNetPolicy:
 
     def act(
         self,
-        params,
-        obs
+        params: Dict,
+        obs: Array
     ) -> jnp.ndarray:
         """Returns the action of the policy on a SINGLE observation.
 

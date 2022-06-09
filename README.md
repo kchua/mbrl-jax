@@ -23,11 +23,11 @@ This script can be run via
 ```
   python3 model_based_experiment.py
       --record-dir   DIR       (optional)   Directory for saving rollouts. If not provided,
-                                        recordings will not be saved.
+                                            recordings will not be saved.
       -s             SEED      (optional)   Experiment random seed. If not provided,
-                                        randomly chosen in [0, 10000).
+                                            randomly chosen in [0, 10000).
       env            ENV       (required)   Experiment environment. Currently only supports
-                                        `MujocoCartpole-v0`.
+                                            `MujocoCartpole-v0`.
       agent_type     AGENT     (required)   Agent type. Choices: [PETS, Policy].
 ```
 

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from mbrl.misc.fully_connected_neural_net import FullyConnectedNeuralNet
-from mbrl._src.utils import Array
+from mbrl._src.utils import Array, create_gaussianizer, reparameterized_gaussian_sampler
 
 
 class NeuralNetDynamicsModel:
@@ -51,21 +51,17 @@ class NeuralNetDynamicsModel:
         action_dim = dummy_action.shape[0]
         pred_dim = self._targ_comp(dummy_obs, dummy_obs).shape[0]
 
-        def gaussianize(query):
-            stddev = jnp.clip(jax.nn.softplus(query[pred_dim:]), min_stddev, max_stddev)
-            return {
-                "mean": query[:pred_dim],
-                "log_stddev": jnp.log(stddev),
-                "stddev": stddev
-            }
-
         self._internal_net = FullyConnectedNeuralNet(
             name="{}_internal".format(self._name),
             input_dim=preproc_obs_dim + action_dim,
             output_dim=2*pred_dim if self._is_probabilistic else pred_dim,
             hidden_dims=hidden_dims,
             hidden_activations=hidden_activations,
-            output_activation=gaussianize if self._is_probabilistic else None
+            output_activation=create_gaussianizer(
+                stddev_nonlinearity=jax.nn.softplus,
+                min_stddev=min_stddev,
+                max_stddev=max_stddev
+            ) if self._is_probabilistic else None
         )
 
     @property
@@ -102,7 +98,7 @@ class NeuralNetDynamicsModel:
             params: Dictionary of parameters.
             obs: Environment observation.
             action: Action.
-            rng_key: JAX rng key, only needed for probabilistic model. Do not reuse outside function.
+            rng_key: JAX RNG key, only needed for probabilistic model. Do not reuse outside function.
 
         Returns:
             The predicted next observation according to the model.
@@ -113,9 +109,7 @@ class NeuralNetDynamicsModel:
             if rng_key is None:
                 raise RuntimeError("Probabilistic dynamics models require a JAX RNG key for prediction.")
 
-            # Reparameterization trick to allow gradient to pass through sampling step
-            raw_prediction = raw_output["mean"] + \
-                raw_output["stddev"] * jax.random.normal(rng_key, shape=raw_output["mean"].shape)
+            raw_prediction = reparameterized_gaussian_sampler(raw_output, rng_key)
         else:
             raw_prediction = raw_output
 
