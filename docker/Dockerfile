@@ -42,6 +42,9 @@ RUN pip3 install mujoco-py gym
 RUN python3 -c "import mujoco_py; exit"   # Import for preliminary compile
 RUN apt-get install -y ffmpeg
 
+# Install dill
+RUN pip3 install dill
+
 # Environment setup
 RUN echo '' >> /root/.bashrc
 RUN echo 'alias python=python3' >> /root/.bashrc

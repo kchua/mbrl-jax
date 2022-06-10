@@ -22,19 +22,22 @@ This script can be run via
 
 ```
   python3 model_based_experiment.py
-      --record-dir   DIR       (optional)   Directory for saving rollouts. If not provided,
-                                            recordings will not be saved.
-      -s             SEED      (optional)   Experiment random seed. If not provided,
-                                            randomly chosen in [0, 10000).
-      env            ENV       (required)   Experiment environment. Currently only supports
-                                            `MujocoCartpole-v0`.
-      agent_type     AGENT     (required)   Agent type. Choices: [PETS, Policy].
+      --logdir                   DIR      (optional)    Directory for saving checkpoints and rollout recordings. 
+      --save-every               FREQ     (optional)    Saving frequency. Defaults to 1 (i.e. save after every
+                                                        iterations)
+      --keep-all-checkpoints              (optional)    Flag which enables saving of all checkpoints (instead of
+                                                        only the most recent one by default).
+      -s                         SEED     (optional)    Experiment random seed. If not provided,
+                                                        randomly chosen in [0, 10000).
+      env                        ENV      (required)    Experiment environment. Currently only supports
+                                                        `MujocoCartpole-v0`.
+      agent_type                 AGENT    (required)    Agent type. Choices: [PETS, Policy].
 ```
 
 For example, to run PETS and save recordings of rollouts to `/external/`:
 
 ```
-python3 model_based_experiment.py --record-dir /external/ MujocoCartpole-v0 PETS
+python3 model_based_experiment.py --logdir /external/ MujocoCartpole-v0 PETS
 ```
 
 Note: The policy agent is a naive implementation of a policy-based learner, and is only provided to illustrate the ways in which one can extend the `DeepModelBasedAgent` class in `/mbrl/agents/model_based_agent.py` (in addition to the random shooting-based PETS learner.)

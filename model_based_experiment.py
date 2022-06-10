@@ -1,6 +1,7 @@
 import argparse
 import os
 
+import dill
 import gym
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 import jax
@@ -60,13 +61,12 @@ CONFIG = {
 }
 
 
-def rollout(env, agent=None, record_path=""):
+def rollout(env, agent=None, recording_path=None):
     observations, actions = [], []
     observations.append(env.reset())
-    if record_path != "":
-        recorder = VideoRecorder(env, base_path=record_path)
-        recorder.capture_frame()
 
+    recorder = VideoRecorder(env, base_path=recording_path, enabled=(recording_path is not None))
+    recorder.capture_frame()
     done = False
     while not done:
         if agent is None:
@@ -75,24 +75,30 @@ def rollout(env, agent=None, record_path=""):
             ac = agent.act(observations[-1])
 
         ob, reward, done, _ = env.step(ac)
-        if record_path != "":
-            recorder.capture_frame()
+        recorder.capture_frame()
 
         observations.append(ob)
         actions.append(ac)
 
-    if record_path != "":
-        recorder.close()
+    recorder.close()
     return observations, actions
 
 
-def main(env_name, agent_type, record_dir="", seed=0):
+def main(
+    env_name,
+    agent_type,
+    logdir=None,
+    save_every=1,
+    keep_all_checkpoints=False,
+    seed=0
+):
     env = gym.make(env_name)
+    env.seed(seed)
 
-    if args.record_dir != "":
-        os.makedirs(args.record_dir, exist_ok=True)
-        os.makedirs(os.path.join(args.record_dir, "init_trajs"), exist_ok=True)
-        os.makedirs(os.path.join(args.record_dir, "agent_rollouts"), exist_ok=True)
+    if logdir is not None:
+        os.makedirs(logdir, exist_ok=True)
+        os.makedirs(os.path.join(logdir, "agent_rollouts"), exist_ok=True)
+        os.makedirs(os.path.join(logdir, "checkpoints"), exist_ok=True)
 
     dynamics_model = NeuralNetDynamicsModel(
         name="dynamics_model",
@@ -131,9 +137,8 @@ def main(env_name, agent_type, record_dir="", seed=0):
     else:
         raise RuntimeError("Invalid agent type.")
 
-    for i in trange(1, ncols=150, desc="Collecting initial trajectories"):
-        record_path = record_dir if record_dir == "" else os.path.join(record_dir, "init_trajs", str(i))
-        observations, actions = rollout(env, record_path=record_path)
+    for _ in trange(1, ncols=150, desc="Collecting initial trajectories"):
+        observations, actions = rollout(env)
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
     for i in range(100):
@@ -142,15 +147,38 @@ def main(env_name, agent_type, record_dir="", seed=0):
             **(CONFIG[env_name]["policy_training"] if agent_type == "Policy" else {})
         )
         agent.reset()
-        record_path = record_dir if record_dir == "" else os.path.join(record_dir, "agent_rollouts", str(i))
-        observations, actions = rollout(env, agent=agent, record_path=record_path)
+
+        if logdir is not None and (i + 1) % save_every == 0:
+            recording_path = os.path.join(logdir, "agent_rollouts/iter_{}".format(i + 1))
+        else:
+            recording_path = None
+
+        observations, actions = rollout(env, agent=agent, recording_path=recording_path)
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
+
+        if logdir is not None and (i + 1) % save_every == 0:
+            if keep_all_checkpoints:
+                checkpoint_path = os.path.join(logdir, "checkpoints/iter_{}.pkl".format(i + 1))
+            else:
+                checkpoint_path = os.path.join(logdir, "checkpoints/checkpoint.pkl")
+
+            with open(checkpoint_path, "wb") as f:
+                dill.dump({
+                    "agent": agent,
+                    "env": env,
+                    "iteration": i + 1,
+                    "seed": seed
+                }, f)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--record-dir", type=str, default="",
-                        help="Path to folder for saving rollouts.")
+    parser.add_argument("--logdir", type=str, default=None,
+                        help="Path to folder for saving all logs.")
+    parser.add_argument("--save-every", type=int, default=1,
+                        help="How often agent checkpoints and videos will be saved.")
+    parser.add_argument("--keep-all-checkpoints", action="store_true",
+                        help="If provided, keeps all checkpoints (rather than only the most recent one).")
     parser.add_argument("-s", type=int, default=-1,
                         help="Random seed.")
     parser.add_argument("env", choices=["MujocoCartpole-v0"],
@@ -162,6 +190,8 @@ if __name__ == "__main__":
     main(
         args.env,
         args.agent_type,
-        record_dir=args.record_dir,
+        logdir=args.logdir,
+        save_every=args.save_every,
+        keep_all_checkpoints=args.keep_all_checkpoints,
         seed=args.s if args.s != -1 else onp.random.randint(10000)
     )
