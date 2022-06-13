@@ -8,7 +8,7 @@ import numpy as onp
 import optax
 from tqdm import trange
 
-from mbrl.misc import NeuralNetDynamicsModel, NeuralNetPolicy
+from mbrl.misc import Dataset, NeuralNetDynamicsModel, NeuralNetPolicy
 from mbrl._src.utils import Array
 
 
@@ -45,11 +45,11 @@ class DeepModelBasedAgent(ABC):
         self._reward_fn = reward_fn
         self._rng_key = rng_key
 
-        self._dynamics_dataset = {
-            "observations": jnp.zeros([0, env.observation_space.shape[0]]),
-            "actions": jnp.zeros([0, env.action_space.shape[0]]),
-            "next_observations": jnp.zeros([0, env.observation_space.shape[0]])
-        }
+        self._dynamics_dataset = Dataset(
+            observation=env.observation_space.shape,
+            action=env.action_space.shape,
+            next_observation=env.observation_space.shape
+        )
 
         params_per_member = [{} for _ in range(self._ensemble_size)]
         for idx in range(self._ensemble_size):
@@ -81,15 +81,11 @@ class DeepModelBasedAgent(ABC):
             raise RuntimeError("Invalid trajectory data passed to agent. "
                                "Ensure that len(obs_seq) == len(action_seq) + 1.")
 
-        self._dynamics_dataset["observations"] = jnp.concatenate([
-            self._dynamics_dataset["observations"], obs_seq[:-1],
-        ])
-        self._dynamics_dataset["actions"] = jnp.concatenate([
-            self._dynamics_dataset["actions"], action_seq,
-        ])
-        self._dynamics_dataset["next_observations"] = jnp.concatenate([
-            self._dynamics_dataset["next_observations"], obs_seq[1:],
-        ])
+        self._dynamics_dataset.add(
+            observation=obs_seq[:-1],
+            action=action_seq,
+            next_observation=obs_seq[1:]
+        )
 
     def train(
         self,
@@ -103,38 +99,23 @@ class DeepModelBasedAgent(ABC):
             n_model_train_steps: Number of parameter updates to perform for the model.
             model_train_batch_size: Size of batches to use for each parameter update for the model.
         """
-        dataset_size = self._dynamics_dataset["observations"].shape[0]
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        bootstrapped_dataset = self._dynamics_dataset.bootstrap(self._ensemble_size, subkey)
 
-        if self._ensemble_size > 1:
-            self._rng_key, subkey = jax.random.split(self._rng_key)
-            bootstrap_subidxs = jax.random.randint(
-                subkey, minval=0, maxval=dataset_size, shape=[self._ensemble_size, dataset_size]
-            )
-        else:
-            bootstrap_subidxs = jnp.arange(dataset_size)[None]
-
-        epoch_steps = 0
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        epoch_iterator = bootstrapped_dataset.epoch(model_train_batch_size, subkey)
         for _ in trange(n_model_train_steps, desc="Dynamics model training", unit="batches", ncols=150):
-            if model_train_batch_size * (epoch_steps + 1) > dataset_size:
-                epoch_steps = 0     # Not enough points left for full batch, reset.
-            if epoch_steps == 0:    # Start of new run through dataset, shuffle bootstrap datasets
-                self._rng_key, subkey = jax.random.split(self._rng_key)
-                bootstrap_subidxs = jax.random.permutation(
-                    subkey, bootstrap_subidxs, axis=-1, independent=True
-                )
+            while True:
+                try:
+                    batches_per_member = next(epoch_iterator)
+                    break
+                except StopIteration:
+                    self._rng_key, subkey = jax.random.split(self._rng_key)
+                    epoch_iterator = bootstrapped_dataset.epoch(model_train_batch_size, subkey)
 
-            batch_start = epoch_steps * model_train_batch_size
-            batch_end = batch_start + model_train_batch_size
-            batch_idxs = bootstrap_subidxs[:, batch_start:batch_end]
-            batches_per_member = {
-                "observations": self._dynamics_dataset["observations"][batch_idxs],
-                "actions": self._dynamics_dataset["actions"][batch_idxs],
-                "next_observations": self._dynamics_dataset["next_observations"][batch_idxs]
-            }
             self._dynamics_params, self._dynamics_optimizer_state = self._model_update_op(
                 self._dynamics_params, self._dynamics_optimizer_state, batches_per_member
             )
-            epoch_steps += 1
 
     @abstractmethod
     def act(
@@ -156,7 +137,7 @@ class DeepModelBasedAgent(ABC):
         def model_update(dynamics_params, dynamics_optimizer_state, all_member_batches):
             def batch_mean_loss(single_net_params, batch):
                 return jnp.mean(jax.vmap(self._dynamics_model.prediction_loss, (None, 0, 0, 0))(
-                    single_net_params, batch["observations"], batch["actions"], batch["next_observations"]
+                    single_net_params, batch["observation"], batch["action"], batch["next_observation"]
                 ))
 
             def sum_ensemble_losses(ensemble_params, ensemble_batches):

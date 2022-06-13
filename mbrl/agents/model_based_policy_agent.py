@@ -7,7 +7,7 @@ import optax
 from tqdm import trange
 
 from mbrl.agents import DeepModelBasedAgent
-from mbrl.misc import NeuralNetDynamicsModel, NeuralNetPolicy
+from mbrl.misc import Dataset, NeuralNetDynamicsModel, NeuralNetPolicy
 from mbrl._src.utils import Array
 
 
@@ -50,9 +50,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         self._policy = policy
         self._policy_optimizer = policy_optimizer
 
-        self._policy_dataset = {
-            "observations": jnp.zeros([0, env.observation_space.shape[0]])
-        }
+        self._policy_dataset = Dataset(observation=env.observation_space.shape)
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
         self._policy_params = self._policy.init({}, subkey)
@@ -75,9 +73,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         """
         super().add_interaction_data(obs_seq, action_seq)
 
-        self._policy_dataset["observations"] = jnp.concatenate([
-            self._policy_dataset["observations"], obs_seq,
-        ])
+        self._policy_dataset.add(observation=obs_seq)
 
     def train(
         self,
@@ -101,27 +97,23 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
 
         super().train(n_model_train_steps, model_train_batch_size)
 
-        dataset_size = self._policy_dataset["observations"].shape[0]
-        idxs = jnp.arange(dataset_size)
-
-        epoch_steps = 0
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        epoch_iterator = self._policy_dataset.epoch(policy_train_batch_size, subkey)
         for _ in trange(n_policy_train_steps, desc="Policy training", unit="batches", ncols=150):
-            if policy_train_batch_size * (epoch_steps + 1) > dataset_size:
-                epoch_steps = 0     # Not enough points left for full batch, reset.
-            if epoch_steps == 0:    # Start of new run through dataset, shuffle dataset
-                self._rng_key, subkey = jax.random.split(self._rng_key)
-                idxs = jax.random.permutation(subkey, idxs)
+            while True:
+                try:
+                    batch_obs = next(epoch_iterator)["observation"]
+                    break
+                except StopIteration:
+                    self._rng_key, subkey = jax.random.split(self._rng_key)
+                    epoch_iterator = self._policy_dataset.epoch(policy_train_batch_size, subkey)
 
-            batch_start = epoch_steps * policy_train_batch_size
-            batch_end = batch_start + policy_train_batch_size
-            batch_idxs = idxs[batch_start:batch_end]
             self._rng_key, subkey = jax.random.split(self._rng_key)
             self._policy_params, self._policy_optimizer_state = self._policy_update_op(
                 self._policy_params, self._dynamics_params, self._policy_optimizer_state,
-                self._policy_dataset["observations"][batch_idxs],
+                batch_obs,
                 subkey
             )
-            epoch_steps += 1
 
     def act(
         self,
