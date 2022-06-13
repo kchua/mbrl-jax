@@ -153,8 +153,9 @@ class DeepModelBasedAgent(ABC):
 
     def _create_rollout_evaluator(
         self,
-        rollout_policy,
-        rollout_horizon
+        rollout_policy: Callable,
+        rollout_horizon: int,
+        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
     ):
         """Helper method that creates evaluators using the model to roll out policies.
         Created so that the rollout_policy parameters are JAX vmap-able.
@@ -163,10 +164,15 @@ class DeepModelBasedAgent(ABC):
             rollout_policy: A policy mapping of the form (params, obs, i) -> action.
                 See examples below.
             rollout_horizon: Rollout horizon
+            fn_to_accumulate: A scalar-valued function on (observation, action, next_observation) that will be
+                accumulated over the rollout for trajectory evaluation.
+                For example, setting this to self.reward_fn will return an evaluator
+                that computes the rollout return.
 
         Returns:
             Policy evaluator which, given (rollout policy params, dynamics parameters, start_obs, JAX RNG key),
-            outputs a predicted final state and return over the rollout horizon.
+            outputs a predicted final state and the sum of fn_to_accumulate over the rollout (truncated to the given
+            horizon).
 
         >>> # Evaluator for length-10 action sequences (e.g. MPC/random shooting methods).
         >>> evaluator_mpc = self._create_rollout_evaluator(lambda action_seq, _obs, i: action_seq[i], 10)
@@ -198,7 +204,7 @@ class DeepModelBasedAgent(ABC):
                     params_per_particle, cur_obs, actions, jax.random.split(s_key, num=self._n_particles)
                 )
 
-                cur_return += jax.vmap(self._reward_fn)(cur_obs, actions, predicted_next_obs)
+                cur_return += jax.vmap(fn_to_accumulate)(cur_obs, actions, predicted_next_obs)
                 return predicted_next_obs, cur_return, r_key
 
             final_obs, rollout_returns, _ = jax.lax.fori_loop(
