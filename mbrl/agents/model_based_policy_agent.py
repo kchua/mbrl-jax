@@ -20,8 +20,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         dynamics_optimizer: optax.GradientTransformation,
         plan_horizon: int,
         n_particles: int,
-        obs_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
-        action_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
+        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
         policy: NeuralNetPolicy,
         policy_optimizer: optax.GradientTransformation,
@@ -37,8 +36,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
             dynamics_optimizer: Optimizer to use for training the dynamics model.
             plan_horizon: Planning horizon to use.
             n_particles: Number of independent particles to use for evaluating each action sequence.
-            obs_reward_fn: Reward function defined on observations.
-            action_reward_fn: Reward function defined on actions.
+            reward_fn: Reward function defined on (observation, action, next_observation).
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
             policy: The neural network policy that will be used by this agent
             policy_optimizer: The optimizer that will be used to train the policy.
@@ -46,7 +44,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         super().__init__(
             env,
             dynamics_model, ensemble_size, dynamics_optimizer, plan_horizon, n_particles,
-            obs_reward_fn, action_reward_fn, rng_key
+            reward_fn, rng_key
         )
 
         self._policy = policy
@@ -148,7 +146,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         @jax.jit
         def perform_policy_update(policy_params, dyn_params, policy_optimizer_state, batch_start, rng_key):
             def mean_batch_cost_to_go(*args):
-                return -jnp.mean(jax.vmap(rollout_and_evaluate, (None, None, 0, 0))(*args))
+                return -jnp.mean(jax.vmap(rollout_and_evaluate, (None, None, 0, 0))(*args)[1])
 
             batch_grad = jax.grad(mean_batch_cost_to_go)(
                 policy_params, dyn_params, batch_start, jax.random.split(rng_key, batch_start.shape[0])

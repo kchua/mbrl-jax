@@ -15,6 +15,20 @@ from mbrl.misc import NeuralNetDynamicsModel, NeuralNetPolicy
 import mbrl.envs
 
 
+def cartpole_reward(obs, action, _next_obs):
+    obs_reward = jnp.exp(-jnp.sum(jnp.square(
+        jnp.array([obs[0] + 0.6 * jnp.sin(obs[1]), 0.6 * jnp.cos(obs[1])]) - jnp.array([0, 0.6])
+    )))
+    action_reward = -0.01 * jnp.sum(jnp.square(action))
+    return obs_reward + action_reward
+
+
+def halfcheetah_reward(obs, action, next_obs):
+    obs_reward = (next_obs[0] - obs[0]) / 0.05     # TODO: 0.05 is the dt of the environment, should set automatically
+    action_reward = -0.1 * jnp.sum(jnp.square(action))
+    return obs_reward + action_reward
+
+
 CONFIG = {
     "MujocoCartpole-v0": {
         "env_args": {},
@@ -42,12 +56,7 @@ CONFIG = {
             "plan_horizon": 20,
             "n_particles": 30,
         },
-        "reward_functions": {
-            "obs_reward_fn": lambda obs, _next_obs: jnp.exp(-jnp.sum(jnp.square(
-                jnp.array([obs[0] + 0.6 * jnp.sin(obs[1]), 0.6 * jnp.cos(obs[1])]) - jnp.array([0, 0.6])
-            ))),
-            "action_reward_fn": lambda action: -0.01 * jnp.sum(jnp.square(action))
-        },
+        "reward_function": cartpole_reward,
         "cem": {
             "n_candidates": 400,
             "n_elites": 40,
@@ -84,10 +93,7 @@ CONFIG = {
             "plan_horizon": 30,
             "n_particles": 15,
         },
-        "reward_functions": {
-            "obs_reward_fn": lambda obs, next_obs: (next_obs[0] - obs[0]) / 0.05,    # Depends on environment frameskip.
-            "action_reward_fn": lambda action: -0.1 * jnp.sum(jnp.square(action))
-        },
+        "reward_function": halfcheetah_reward,
         "cem": {
             "n_candidates": 500,
             "n_elites": 50,
@@ -151,7 +157,7 @@ def main(
             env=env,
             dynamics_model=dynamics_model,
             **CONFIG[env_name]["prediction"],
-            **CONFIG[env_name]["reward_functions"],
+            reward_fn=CONFIG[env_name]["reward_function"],
             **CONFIG[env_name]["cem"],
             rng_key=jax.random.PRNGKey(seed),
         )
@@ -167,7 +173,7 @@ def main(
             env=env,
             dynamics_model=dynamics_model,
             **CONFIG[env_name]["prediction"],
-            **CONFIG[env_name]["reward_functions"],
+            reward_fn=CONFIG[env_name]["reward_function"],
             rng_key=jax.random.PRNGKey(seed),
             policy=policy,
             policy_optimizer=optax.adamw(1e-3)

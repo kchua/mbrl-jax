@@ -20,8 +20,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         dynamics_optimizer: optax.GradientTransformation,
         plan_horizon: int,
         n_particles: int,
-        obs_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
-        action_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
+        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
         n_candidates: int,
         n_elites: int,
@@ -40,8 +39,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             dynamics_optimizer: Optimizer to use for training the dynamics model.
             plan_horizon: Planning horizon to use.
             n_particles: Number of independent particles to use for evaluating each action sequence.
-            obs_reward_fn: Reward function defined on observations.
-            action_reward_fn: Reward function defined on actions.
+            reward_fn: Reward function defined on (observation, action, next_observation).
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
             n_candidates: Number of action sequence candidates for every iteration of CEM.
             n_elites: Number of elite action sequences used to update the CEM proposal distribution.
@@ -51,7 +49,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         super().__init__(
             env,
             dynamics_model, ensemble_size, dynamics_optimizer, plan_horizon, n_particles,
-            obs_reward_fn, action_reward_fn, rng_key,
+            reward_fn, rng_key,
         )
 
         self._action_bounds = (env.action_space.low, env.action_space.high)
@@ -119,7 +117,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             rng_key, subkey = jax.random.split(rng_key)
             candidate_evals = jax.vmap(rollout_and_evaluate, (0, None, None, 0))(
                 action_seq_candidates, params, cur_obs, jax.random.split(subkey, num=self._n_candidates)
-            )
+            )[1]
 
             sorting_idxs = jnp.argsort(candidate_evals)
             elite_candidates = pre_bounding_candidates[sorting_idxs[-self._n_elites:]]
