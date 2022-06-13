@@ -17,6 +17,7 @@ import mbrl.envs
 
 CONFIG = {
     "MujocoCartpole-v0": {
+        "env_args": {},
         "dynamics": {
             "hidden_dims": [50, 50, 50],
             "hidden_activations": jax.nn.swish,
@@ -42,7 +43,7 @@ CONFIG = {
             "n_particles": 30,
         },
         "reward_functions": {
-            "obs_reward_fn": lambda obs: jnp.exp(-jnp.sum(jnp.square(
+            "obs_reward_fn": lambda obs, _next_obs: jnp.exp(-jnp.sum(jnp.square(
                 jnp.array([obs[0] + 0.6 * jnp.sin(obs[1]), 0.6 * jnp.cos(obs[1])]) - jnp.array([0, 0.6])
             ))),
             "action_reward_fn": lambda action: -0.01 * jnp.sum(jnp.square(action))
@@ -57,6 +58,43 @@ CONFIG = {
             "n_policy_train_steps": 2000,
             "policy_train_batch_size": 32
         }
+    },
+    "HalfCheetah-v3": {
+        "env_args": {
+            "exclude_current_positions_from_observation": False,    # Need access to x_pos to compute velocity
+        },
+        "dynamics": {
+            "hidden_dims": [200, 200, 200],
+            "hidden_activations": jax.nn.swish,
+            "is_probabilistic": True
+        },
+        "policy": {},
+        "preprocessing_functions": {
+            "obs_preproc": lambda obs: jnp.concatenate([obs[1:2], jnp.sin(obs[2:3]), jnp.cos(obs[2:3]), obs[3:]]),
+            "targ_comp": lambda obs, next_obs: next_obs - obs,
+            "next_obs_comp": lambda obs, pred: obs + pred
+        },
+        "model_training": {
+            "n_model_train_steps": 2000,
+            "model_train_batch_size": 32
+        },
+        "prediction": {
+            "ensemble_size": 5,
+            "dynamics_optimizer": optax.adamw(1e-3),
+            "plan_horizon": 30,
+            "n_particles": 15,
+        },
+        "reward_functions": {
+            "obs_reward_fn": lambda obs, next_obs: (next_obs[0] - obs[0]) / 0.05,    # Depends on environment frameskip.
+            "action_reward_fn": lambda action: -0.1 * jnp.sum(jnp.square(action))
+        },
+        "cem": {
+            "n_candidates": 500,
+            "n_elites": 50,
+            "cem_epsilon": 0.05,
+            "max_cem_iters": 5,
+        },
+        "policy_training": {}
     }
 }
 
@@ -92,7 +130,7 @@ def main(
     keep_all_checkpoints=False,
     seed=0
 ):
-    env = gym.make(env_name)
+    env = gym.make(env_name, **CONFIG[env_name]["env_args"])
     env.seed(seed)
 
     if logdir is not None:
@@ -181,8 +219,8 @@ if __name__ == "__main__":
                         help="If provided, keeps all checkpoints (rather than only the most recent one).")
     parser.add_argument("-s", type=int, default=-1,
                         help="Random seed.")
-    parser.add_argument("env", choices=["MujocoCartpole-v0"],
-                        help="Environment [MujocoCartpole-v0]")
+    parser.add_argument("env", choices=["MujocoCartpole-v0", "HalfCheetah-v3"],
+                        help="Environment [MujocoCartpole-v0, HalfCheetah-v3]")
     parser.add_argument("agent_type", choices=["PETS", "Policy"],
                         help="Agent type [PETS/Policy]")
     args = parser.parse_args()

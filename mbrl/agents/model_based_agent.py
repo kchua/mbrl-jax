@@ -21,7 +21,7 @@ class DeepModelBasedAgent(ABC):
         dynamics_optimizer: optax.GradientTransformation,
         plan_horizon: int,
         n_particles: int,
-        obs_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
+        obs_reward_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
         action_reward_fn: Callable[[jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
         *_args, **_kwargs
@@ -35,7 +35,7 @@ class DeepModelBasedAgent(ABC):
             dynamics_optimizer: Optimizer to use for training the dynamics model.
             plan_horizon: Planning horizon to use.
             n_particles: Number of independent particles to use for evaluating each action sequence.
-            obs_reward_fn: Reward function defined on observations.
+            obs_reward_fn: Reward function defined on (observation, next_observation).
             action_reward_fn: Reward function defined on actions.
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
         """
@@ -219,7 +219,7 @@ class DeepModelBasedAgent(ABC):
                     params_per_particle, cur_obs, actions, jax.random.split(s_key, num=self._n_particles)
                 )
 
-                obs_reward = jax.vmap(self._obs_reward_fn)(predicted_next_obs)
+                obs_reward = jax.vmap(self._obs_reward_fn)(cur_obs, predicted_next_obs)
                 action_reward = jax.vmap(self._action_reward_fn)(actions)
                 cur_return += obs_reward + action_reward
 
