@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Any, Callable
 
 from gym.envs.mujoco import MujocoEnv
 import jax
@@ -153,21 +153,22 @@ class DeepModelBasedAgent(ABC):
 
     def _create_rollout_evaluator(
         self,
-        rollout_policy: Callable,
+        rollout_policy: Callable[[Any, jnp.ndarray, int, jax.random.KeyArray], jnp.ndarray],
         rollout_horizon: int,
-        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
+        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.KeyArray], jnp.ndarray],
     ):
         """Helper method that creates evaluators using the model to roll out policies.
         Created so that the rollout_policy parameters are JAX vmap-able.
 
         Args:
-            rollout_policy: A policy mapping of the form (params, obs, i) -> action.
+            rollout_policy: A policy mapping of the form (params, obs, i, rng_key) -> action.
                 See examples below.
             rollout_horizon: Rollout horizon
-            fn_to_accumulate: A scalar-valued function on (observation, action, next_observation) that will be
-                accumulated over the rollout for trajectory evaluation.
+            fn_to_accumulate: A scalar-valued function on (observation, action, next_observation, rng_key)
+                that will be accumulated over the rollout for trajectory evaluation.
                 For example, setting this to self.reward_fn will return an evaluator
                 that computes the rollout return.
+                rng_key is provided to allow for random functions (e.g. entropy bonus estimated from samples)
 
         Returns:
             Policy evaluator which, given (rollout policy params, dynamics parameters, start_obs, JAX RNG key),
@@ -197,14 +198,22 @@ class DeepModelBasedAgent(ABC):
 
             def simulate_single_timestep(i, args):
                 cur_obs, cur_return, r_key = args
-                actions = jax.vmap(rollout_policy, (None, 0, None))(rollout_policy_params, cur_obs, i)
+
+                r_key, s_key = jax.random.split(r_key)
+                actions = jax.vmap(rollout_policy, (None, 0, None, 0))(
+                    rollout_policy_params, cur_obs, i, jax.random.split(s_key, num=self._n_particles)
+                )
 
                 r_key, s_key = jax.random.split(r_key)
                 predicted_next_obs = jax.vmap(self._dynamics_model.predict)(
                     params_per_particle, cur_obs, actions, jax.random.split(s_key, num=self._n_particles)
                 )
 
-                cur_return += jax.vmap(fn_to_accumulate)(cur_obs, actions, predicted_next_obs)
+                r_key, s_key = jax.random.split(r_key)
+                cur_return += jax.vmap(fn_to_accumulate)(
+                    cur_obs, actions, predicted_next_obs, jax.random.split(s_key, num=self._n_particles)
+                )
+
                 return predicted_next_obs, cur_return, r_key
 
             final_obs, rollout_returns, _ = jax.lax.fori_loop(
@@ -214,3 +223,11 @@ class DeepModelBasedAgent(ABC):
             return final_obs, jnp.mean(rollout_returns)
 
         return rollout_and_evaluate
+
+    @staticmethod
+    def _wrap_deterministic_reward(reward_fn):
+        """Convenience function which wraps a deterministic reward function in another function
+        that can take in rng_key as an additional argument.
+        Use when passing deterministic reward functions to create_rollout_evaluator.
+        """
+        return lambda observation, action, next_observation, _rng_key: reward_fn(observation, action, next_observation)

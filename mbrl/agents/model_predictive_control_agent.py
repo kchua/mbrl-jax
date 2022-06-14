@@ -102,9 +102,9 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
 
     def _create_cross_entropy_method_op(self):
         rollout_and_evaluate = self._create_rollout_evaluator(
-            rollout_policy=lambda action_seq, _obs, i: action_seq[i],
+            rollout_policy=lambda action_seq, _obs, i, _rng_key: action_seq[i],
             rollout_horizon=self._plan_horizon,
-            fn_to_accumulate=self._reward_fn
+            fn_to_accumulate=self._wrap_deterministic_reward(self._reward_fn)
         )
 
         @jax.jit

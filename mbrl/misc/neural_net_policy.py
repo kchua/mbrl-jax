@@ -70,13 +70,15 @@ class NeuralNetPolicy:
     def act(
         self,
         params: Dict,
-        obs: Array
+        obs: Array,
+        _rng_key=None
     ) -> jnp.ndarray:
         """Returns the action of the policy on a SINGLE observation.
 
         Args:
             params: Dictionary of parameters.
             obs: Environment observation.
+            _rng_key: Unused.
 
         Returns:
             The action taken by the policy on the given observation.

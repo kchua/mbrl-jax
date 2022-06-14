@@ -131,9 +131,9 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
 
     def _create_policy_update_op(self):
         rollout_and_evaluate = self._create_rollout_evaluator(
-            rollout_policy=lambda policy_params, obs, _i: self._policy.act(policy_params, obs),
+            rollout_policy=lambda policy_params, obs, _i, rng_key: self._policy.act(policy_params, obs, rng_key),
             rollout_horizon=self._plan_horizon,
-            fn_to_accumulate=self._reward_fn
+            fn_to_accumulate=self._wrap_deterministic_reward(self._reward_fn)
         )
 
         @jax.jit
