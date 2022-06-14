@@ -22,15 +22,19 @@ This script can be run via
 
 ```
   python3 model_based_experiment.py
-      --logdir                   DIR      (optional)    Directory for saving checkpoints and rollout recordings. 
-      --save-every               FREQ     (optional)    Saving frequency. Defaults to 1 (i.e. save after every
-                                                        iterations)
-      --keep-all-checkpoints              (optional)    Flag which enables saving of all checkpoints (instead of
-                                                        only the most recent one by default).
-      -s                         SEED     (optional)    Experiment random seed. If not provided,
-                                                        randomly chosen in [0, 10000).
-      env                        ENV      (required)    Experiment environment. Currently only supports
-                                                        `MujocoCartpole-v0`.
+      --logdir                   DIR      (optional)    Directory for saving checkpoints and 
+                                                        rollout recordings. 
+      --save-every               FREQ     (optional)    Saving frequency. Defaults to 1 (i.e. 
+                                                        save after every iteration)
+      --keep-all-checkpoints              (optional)    Flag which enables saving of all 
+                                                        checkpoints (instead of only the most 
+                                                        recent one).
+      -s                         SEED     (optional)    Experiment random seed. If not 
+                                                        provided, uniformly chosen in 
+                                                        [0, 10000).
+      env                        ENV      (required)    Experiment environment. Currently 
+                                                        supports [`MujocoCartpole-v0`,
+                                                        `HalfCheetah-v3`]
       agent_type                 AGENT    (required)    Agent type. Choices: [PETS, Policy].
 ```
 

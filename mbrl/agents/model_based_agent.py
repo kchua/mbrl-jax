@@ -185,6 +185,7 @@ class DeepModelBasedAgent(ABC):
         ... )
         """
         def rollout_and_evaluate(rollout_policy_params, dynamics_params, start_obs, rng_key):
+            # Assign an ensemble member to each particle at random
             rng_key, subkey = jax.random.split(rng_key)
             particle_to_member = jax.random.randint(
                 subkey, minval=0, maxval=self._ensemble_size, shape=[self._n_particles]
