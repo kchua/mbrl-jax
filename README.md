@@ -29,6 +29,8 @@ This script can be run via
       --keep-all-checkpoints              (optional)    Flag which enables saving of all 
                                                         checkpoints (instead of only the most 
                                                         recent one).
+      --iters                    ITERS    (optional)    Number of training iterations to run.
+                                                        Defaults to 100.
       -s                         SEED     (optional)    Experiment random seed. If not 
                                                         provided, uniformly chosen in 
                                                         [0, 10000).

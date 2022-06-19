@@ -18,6 +18,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         dynamics_model: NeuralNetDynamicsModel,
         ensemble_size: int,
         dynamics_optimizer: optax.GradientTransformation,
+        n_model_eval_points: int,
         plan_horizon: int,
         n_particles: int,
         reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
@@ -37,6 +38,7 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             dynamics_model: Dynamics model to be used by the agent.
             ensemble_size: Number of models to train for ensemble.
             dynamics_optimizer: Optimizer to use for training the dynamics model.
+            n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
             plan_horizon: Planning horizon to use.
             n_particles: Number of independent particles to use for evaluating each action sequence.
             reward_fn: Reward function defined on (observation, action, next_observation).
@@ -48,7 +50,8 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         """
         super().__init__(
             env,
-            dynamics_model, ensemble_size, dynamics_optimizer, plan_horizon, n_particles,
+            dynamics_model, ensemble_size, dynamics_optimizer,
+            n_model_eval_points, plan_horizon, n_particles,
             reward_fn, rng_key,
         )
 

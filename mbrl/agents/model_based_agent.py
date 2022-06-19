@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any, Callable, Dict
 
 from gym.envs.mujoco import MujocoEnv
 import jax
@@ -19,6 +19,7 @@ class DeepModelBasedAgent(ABC):
         dynamics_model: NeuralNetDynamicsModel,
         ensemble_size: int,
         dynamics_optimizer: optax.GradientTransformation,
+        n_model_eval_points: int,
         plan_horizon: int,
         n_particles: int,
         reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
@@ -32,6 +33,7 @@ class DeepModelBasedAgent(ABC):
             dynamics_model: Dynamics model to be used by the agent.
             ensemble_size: Number of models to train for ensemble.
             dynamics_optimizer: Optimizer to use for training the dynamics model.
+            n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
             plan_horizon: Planning horizon to use.
             n_particles: Number of independent particles to use for evaluating each action sequence.
             reward_fn: Reward function defined on (observation, action, next_observation).
@@ -40,6 +42,7 @@ class DeepModelBasedAgent(ABC):
         self._dynamics_model = dynamics_model
         self._ensemble_size = ensemble_size
         self._dynamics_optimizer = dynamics_optimizer
+        self._n_model_eval_points = n_model_eval_points
         self._plan_horizon = plan_horizon
         self._n_particles = n_particles
         self._reward_fn = reward_fn
@@ -56,6 +59,8 @@ class DeepModelBasedAgent(ABC):
             self._rng_key, subkey = jax.random.split(self._rng_key)
             params_per_member[idx] = self._dynamics_model.init(params_per_member[idx], subkey)
         self._dynamics_params = jax.tree_map(lambda *a: jnp.stack(a), *params_per_member)
+
+        self._model_eval_op = self._create_model_eval_op()
 
         self._dynamics_optimizer_state = self._dynamics_optimizer.init(self._dynamics_params)
         self._model_update_op = self._create_model_update_op()
@@ -131,6 +136,33 @@ class DeepModelBasedAgent(ABC):
             Action chosen by the agent
         """
         pass
+
+    def get_logging_statistics(self, *_args, **_kwargs) -> Dict[str, float]:
+        """Get statistics for logging from this agent.
+
+        Args:
+            *_args: UNUSED
+            **_kwargs: UNUSED
+
+        Returns:
+            Dictionary of named statistics to be logged.
+        """
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        iterator = self._dynamics_dataset.epoch(self._n_model_eval_points, subkey, full_batch_required=False)
+        return {
+            "Dynamics model log-likelihood": self._model_eval_op(self._dynamics_params, next(iterator))
+        }
+
+    def _create_model_eval_op(self):
+        @jax.jit
+        def ensemble_eval(dynamics_params, eval_batch):
+            def batch_mean_loss(single_net_params, batch):
+                return jnp.mean(jax.vmap(self._dynamics_model.prediction_loss, (None, 0, 0, 0))(
+                    single_net_params, batch["observation"], batch["action"], batch["next_observation"]
+                ))
+            return jnp.mean(jax.vmap(batch_mean_loss, (0, None))(dynamics_params, eval_batch))
+
+        return ensemble_eval
 
     def _create_model_update_op(self):
         @jax.jit

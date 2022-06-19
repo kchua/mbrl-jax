@@ -76,15 +76,21 @@ class Dataset:
     def epoch(
         self,
         batch_size: int,
-        rng_key: jax.random.KeyArray
+        rng_key: jax.random.KeyArray,
+        full_batch_required: bool = True
     ):
         """Creates an iterator to iterate through the dataset with batches of the given size.
 
         Args:
             batch_size: Size of batches returned by the iterator.
             rng_key: JAX RNG key used to shuffle data for the epoch, do not reuse outside this function.
+            full_batch_required: If True, the epoch terminates once there is not enough data left to form a full
+                batch.
         """
-        return Dataset._DatasetIterator(self, batch_size, rng_key)
+        return Dataset._DatasetIterator(
+            self, batch_size, rng_key,
+            full_batch_required=full_batch_required
+        )
 
     class _BootstrappedDataset:
         def __init__(self, dataset, ensemble_size, rng_key):
@@ -99,25 +105,28 @@ class Dataset:
             else:
                 self._bootstrap_idxs = jnp.arange(len(dataset))[None]
 
-        def epoch(self, batch_size, rng_key):
+        def epoch(self, batch_size, rng_key, full_batch_required=True):
             return Dataset._DatasetIterator(
-                self._dataset, batch_size, rng_key, idxs=self._bootstrap_idxs
+                self._dataset, batch_size, rng_key,
+                idxs=self._bootstrap_idxs,
+                full_batch_required=full_batch_required
             )
 
     class _DatasetIterator:
-        def __init__(self, dataset, batch_size, rng_key, idxs=None):
+        def __init__(self, dataset, batch_size, rng_key, idxs=None, full_batch_required=True):
             self._dataset: Dataset = dataset
             self._dataset_length = len(dataset)
             self._batch_size = batch_size
             self._epoch_steps = 0
             self._rng_key = rng_key
+            self._full_batch_required = full_batch_required
 
             if idxs is not None:
                 self._idxs = idxs
             else:
                 self._idxs = jnp.arange(len(dataset))
 
-            if self._idxs.shape[-1] < batch_size:
+            if self._idxs.shape[-1] < batch_size and full_batch_required:
                 raise RuntimeError("Not enough data for full batch.")
 
             # Shuffle indices for epoch
@@ -128,11 +137,13 @@ class Dataset:
             return self
 
         def __next__(self):
-            if self._batch_size * (self._epoch_steps + 1) > self._dataset_length:
-                raise StopIteration("Not enough data for a full batch.")
+            if self._full_batch_required and self._batch_size * (self._epoch_steps + 1) > self._dataset_length:
+                raise StopIteration("Not enough data left for a full batch.")
+            if self._batch_size * self._epoch_steps >= self._dataset_length:
+                raise StopIteration("Reached end of dataset.")
 
             batch_start = self._epoch_steps * self._batch_size
-            batch_end = batch_start + self._batch_size
+            batch_end = min(batch_start + self._batch_size, self._dataset_length)
             batch_idxs = self._idxs[..., batch_start:batch_end]
             self._epoch_steps += 1
 
