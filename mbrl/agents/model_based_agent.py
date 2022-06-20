@@ -8,7 +8,8 @@ import numpy as onp
 import optax
 from tqdm import trange
 
-from mbrl.misc import Dataset, NeuralNetDynamicsModel, NeuralNetPolicy
+from mbrl.misc import Dataset, NeuralNetDynamicsModel
+from mbrl.policies import DeterministicPolicy
 from mbrl._src.utils import Array
 
 
@@ -104,6 +105,12 @@ class DeepModelBasedAgent(ABC):
             n_model_train_steps: Number of parameter updates to perform for the model.
             model_train_batch_size: Size of batches to use for each parameter update for the model.
         """
+        self._dynamics_model.fit_normalizer(
+            self._dynamics_dataset["observation"],
+            self._dynamics_dataset["action"],
+            self._dynamics_dataset["next_observation"]
+        )
+
         self._rng_key, subkey = jax.random.split(self._rng_key)
         bootstrapped_dataset = self._dynamics_dataset.bootstrap(self._ensemble_size, subkey)
 
@@ -211,7 +218,7 @@ class DeepModelBasedAgent(ABC):
         >>> evaluator_mpc = self._create_rollout_evaluator(lambda action_seq, _obs, i: action_seq[i], 10)
         >>>
         >>> # Evaluator for time-independent policy over a length-50 horizon
-        >>> policy: NeuralNetPolicy
+        >>> policy: DeterministicPolicy
         >>> evaluator_policy = self._create_rollout_evaluator(
         ...     lambda policy_params, obs, _i: policy.act(policy_params, obs), 50
         ... )

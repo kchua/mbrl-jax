@@ -8,7 +8,7 @@ from mbrl.misc import FullyConnectedNeuralNet
 from mbrl._src.utils import Array
 
 
-class NeuralNetPolicy:
+class DeterministicPolicy:
     def __init__(
         self,
         name: str,

@@ -12,7 +12,8 @@ import optax
 from tqdm import trange
 
 from mbrl.agents import ModelPredictiveControlAgent, ModelBasedPolicyAgent
-from mbrl.misc import NeuralNetDynamicsModel, NeuralNetPolicy
+from mbrl.misc import NeuralNetDynamicsModel
+from mbrl.policies import DeterministicPolicy
 import mbrl.envs
 
 
@@ -205,7 +206,7 @@ def main(
             rng_key=jax.random.PRNGKey(seed),
         )
     elif agent_type == "Policy":
-        policy = NeuralNetPolicy(
+        policy = DeterministicPolicy(
             name="policy",
             env=env,
             dummy_obs=env.reset(),

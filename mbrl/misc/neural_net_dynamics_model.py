@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from mbrl.misc.fully_connected_neural_net import FullyConnectedNeuralNet
-from mbrl._src.utils import Array, create_gaussianizer, reparameterized_gaussian_sampler
+from mbrl._src.utils import Array, create_gaussianizer, normalize, reparameterized_gaussian_sampler
 
 
 class NeuralNetDynamicsModel:
@@ -21,6 +21,8 @@ class NeuralNetDynamicsModel:
         obs_preproc: Callable[[Array], Array] = lambda obs: obs,
         targ_comp: Callable[[Array, Array], Array] = lambda obs, next_obs: next_obs,
         next_obs_comp: Callable[[Array, Array], Array] = lambda obs, pred: pred,
+        normalize_inputs: bool = True,
+        normalize_outputs: bool = True
     ):
         """Creates a dynamics model which internally uses a neural network with a deterministic output.
 
@@ -40,16 +42,27 @@ class NeuralNetDynamicsModel:
                 Defaults to (obs, next_obs) -> next_obs (i.e. network directly predicts next observation).
             next_obs_comp: Computes next_obs prediction from (obs, net_output).
                 Defaults to (obs, net_output) -> net_output (i.e. network directly predicts next observation).
+            normalize_inputs: Indicates if input normalization will be used.
+            normalize_outputs: Indicates if output normalization will be used.
         """
         self._name = name
         self._obs_preproc = obs_preproc
         self._targ_comp = targ_comp
         self._next_obs_comp = next_obs_comp
         self._is_probabilistic = is_probabilistic
+        self._is_normalizing_inputs = normalize_inputs
+        self._is_normalizing_outputs = normalize_outputs
 
         preproc_obs_dim = self._obs_preproc(dummy_obs).shape[0]
         action_dim = dummy_action.shape[0]
         pred_dim = self._targ_comp(dummy_obs, dummy_obs).shape[0]
+
+        self._normalizer_params = {
+            name: {
+                "center": jnp.zeros(shape=[dim]),
+                "scale": jnp.ones(shape=[dim])
+            } for (name, dim) in [("input", preproc_obs_dim + action_dim), ("output", pred_dim)]
+        }
 
         self._internal_net = FullyConnectedNeuralNet(
             name="{}_internal".format(self._name),
@@ -85,6 +98,35 @@ class NeuralNetDynamicsModel:
         """
         return self._internal_net.init(params, rng_key)
 
+    def fit_normalizer(self, obs, actions, next_obs) -> None:
+        """Fits the normalizer of this network to the given points.
+
+        Args:
+            obs: Array of observations.
+            actions: Array of actions.
+            next_obs: Array of next observations.
+        """
+        if obs.shape[0] != actions.shape[0] or actions.shape[0] != next_obs.shape[0]:
+            raise RuntimeError("Arrays for fitting normalizer do not have matching lengths.")
+
+        if self._is_normalizing_inputs:
+            inputs = jnp.concatenate([jax.vmap(self._obs_preproc)(obs), actions], axis=-1)
+            input_mean = jnp.mean(inputs, axis=0)
+            input_stddev = jnp.std(inputs, axis=0)
+            self._normalizer_params["input"] = {
+                "center": input_mean,
+                "scale": jnp.where(input_stddev > 1e-5, input_stddev, jnp.ones_like(input_stddev))
+            }
+
+        if self._is_normalizing_outputs:
+            outputs = jax.vmap(self._targ_comp)(obs, next_obs)
+            output_mean = jnp.mean(outputs, axis=0)
+            output_stddev = jnp.std(outputs, axis=0)
+            self._normalizer_params["output"] = {
+                "center": output_mean,
+                "scale": jnp.where(output_stddev > 1e-5, output_stddev, jnp.ones_like(output_stddev))
+            }
+
     def predict(
         self,
         params: Dict,
@@ -113,6 +155,8 @@ class NeuralNetDynamicsModel:
         else:
             raw_prediction = raw_output
 
+        if self._is_normalizing_outputs:
+            raw_prediction = normalize(raw_prediction, self._normalizer_params["output"], invert=True)
         return self._next_obs_comp(obs, raw_prediction)
 
     def prediction_loss(
@@ -138,7 +182,11 @@ class NeuralNetDynamicsModel:
             log-likelihood.
         """
         raw_output = self._compute_net_output(params, obs, action)
-        targ = self._targ_comp(obs, next_obs)
+
+        if self._is_normalizing_outputs:
+            targ = normalize(self._targ_comp(obs, next_obs), self._normalizer_params["output"])
+        else:
+            targ = self._targ_comp(obs, next_obs)
 
         if self.is_probabilistic:
             mse = 0.5 * jnp.sum(jnp.square((raw_output["mean"] - targ) / raw_output["stddev"]))
@@ -149,4 +197,10 @@ class NeuralNetDynamicsModel:
 
     def _compute_net_output(self, params, obs, action):
         preproc_obs = self._obs_preproc(obs)
-        return self._internal_net.forward(params, jnp.concatenate([preproc_obs, action]))
+        if self._is_normalizing_inputs:
+            return self._internal_net.forward(
+                params,
+                normalize(jnp.concatenate([preproc_obs, action]), self._normalizer_params["input"])
+            )
+        else:
+            return self._internal_net.forward(params, jnp.concatenate([preproc_obs, action]))

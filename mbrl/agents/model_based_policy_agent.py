@@ -7,7 +7,8 @@ import optax
 from tqdm import trange
 
 from mbrl.agents import DeepModelBasedAgent
-from mbrl.misc import Dataset, NeuralNetDynamicsModel, NeuralNetPolicy
+from mbrl.misc import Dataset, NeuralNetDynamicsModel
+from mbrl.policies import DeterministicPolicy
 from mbrl._src.utils import Array
 
 
@@ -23,7 +24,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         n_particles: int,
         reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
-        policy: NeuralNetPolicy,
+        policy: DeterministicPolicy,
         policy_optimizer: optax.GradientTransformation,
         *_args, **_kwargs
     ):

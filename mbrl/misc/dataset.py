@@ -25,7 +25,12 @@ class Dataset:
             self._dataset[name] = jnp.zeros([0] + list(shape))
 
     def __len__(self):
+        """Returns number of points added to this dataset so far."""
         return self._length
+
+    def __getitem__(self, key) -> jnp.ndarray:
+        """Returns a named component in the dataset, if it exists."""
+        return self._dataset[key]
 
     def add(self, **kwargs: jnp.ndarray) -> None:
         """Adds a list of new datapoints to the existing dataset.

@@ -45,5 +45,3 @@ For example, to run PETS and save recordings of rollouts to `/external/`:
 ```
 python3 model_based_experiment.py --logdir /external/ MujocoCartpole-v0 PETS
 ```
-
-Note: The policy agent is a naive implementation of a policy-based learner, and is only provided to illustrate the ways in which one can extend the `DeepModelBasedAgent` class in `/mbrl/agents/model_based_agent.py` (in addition to the random shooting-based PETS learner.)
