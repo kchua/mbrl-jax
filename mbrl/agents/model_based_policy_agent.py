@@ -131,22 +131,23 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         Returns:
             Action chosen by the agent
         """
-        return onp.array(self._policy.act(self._policy_params, obs))
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        return onp.array(self._policy.act(self._policy_params, obs, subkey))
 
     def _create_policy_update_op(self):
         rollout_and_evaluate = self._create_rollout_evaluator(
             rollout_policy=lambda policy_params, obs, _i, rng_key: self._policy.act(policy_params, obs, rng_key),
             rollout_horizon=self._plan_horizon,
-            fn_to_accumulate=self._wrap_deterministic_reward(self._reward_fn)
+            fn_to_accumulate=self._wrap_basic_reward(self._reward_fn)
         )
 
         @jax.jit
-        def perform_policy_update(policy_params, dyn_params, policy_optimizer_state, batch_start, rng_key):
+        def perform_policy_update(policy_params, dynamics_params, policy_optimizer_state, batch_start, rng_key):
             def mean_batch_cost_to_go(*args):
                 return -jnp.mean(jax.vmap(rollout_and_evaluate, (None, None, 0, 0))(*args)[1])
 
             batch_grad = jax.grad(mean_batch_cost_to_go)(
-                policy_params, dyn_params, batch_start, jax.random.split(rng_key, batch_start.shape[0])
+                policy_params, dynamics_params, batch_start, jax.random.split(rng_key, batch_start.shape[0])
             )
             updates, policy_optimizer_state = \
                 self._policy_optimizer.update(batch_grad, policy_optimizer_state, policy_params)

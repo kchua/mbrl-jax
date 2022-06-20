@@ -194,7 +194,8 @@ class DeepModelBasedAgent(ABC):
         self,
         rollout_policy: Callable[[Any, jnp.ndarray, int, jax.random.KeyArray], jnp.ndarray],
         rollout_horizon: int,
-        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.KeyArray], jnp.ndarray],
+        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, Dict, Dict, jax.random.KeyArray],
+                                   jnp.ndarray],
     ):
         """Helper method that creates evaluators using the model to roll out policies.
         Created so that the rollout_policy parameters are JAX vmap-able.
@@ -203,10 +204,10 @@ class DeepModelBasedAgent(ABC):
             rollout_policy: A policy mapping of the form (params, obs, i, rng_key) -> action.
                 See examples below.
             rollout_horizon: Rollout horizon
-            fn_to_accumulate: A scalar-valued function on (observation, action, next_observation, rng_key)
+            fn_to_accumulate: A scalar-valued function on
+                (observation, action, next_observation, rollout_policy_params, dynamics_params, rng_key)
                 that will be accumulated over the rollout for trajectory evaluation.
-                For example, setting this to self.reward_fn will return an evaluator
-                that computes the rollout return.
+                For example, setting this to self.reward_fn will return an evaluator that computes the rollout return.
                 rng_key is provided to allow for random functions (e.g. entropy bonus estimated from samples)
 
         Returns:
@@ -215,12 +216,18 @@ class DeepModelBasedAgent(ABC):
             horizon).
 
         >>> # Evaluator for length-10 action sequences (e.g. MPC/random shooting methods).
-        >>> evaluator_mpc = self._create_rollout_evaluator(lambda action_seq, _obs, i: action_seq[i], 10)
+        >>> evaluator_mpc = self._create_rollout_evaluator(
+        ...     lambda action_seq, _obs, i: action_seq[i],
+        ...     10,
+        ...     self._wrap_basic_reward(self._reward_fn)
+        ... )
         >>>
         >>> # Evaluator for time-independent policy over a length-50 horizon
         >>> policy: DeterministicPolicy
         >>> evaluator_policy = self._create_rollout_evaluator(
-        ...     lambda policy_params, obs, _i: policy.act(policy_params, obs), 50
+        ...     lambda policy_params, obs, _i: policy.act(policy_params, obs),
+        ...     50,
+        ...     self._wrap_basic_reward(self._reward_fn)
         ... )
         """
         def rollout_and_evaluate(rollout_policy_params, dynamics_params, start_obs, rng_key):
@@ -250,8 +257,13 @@ class DeepModelBasedAgent(ABC):
                 )
 
                 r_key, s_key = jax.random.split(r_key)
-                cur_return += jax.vmap(fn_to_accumulate)(
-                    cur_obs, actions, predicted_next_obs, jax.random.split(s_key, num=self._n_particles)
+                cur_return += jax.vmap(fn_to_accumulate, (0, 0, 0, None, None, 0))(
+                    cur_obs,
+                    actions,
+                    predicted_next_obs,
+                    rollout_policy_params,
+                    dynamics_params,
+                    jax.random.split(s_key, num=self._n_particles)
                 )
 
                 return predicted_next_obs, cur_return, r_key
@@ -265,9 +277,9 @@ class DeepModelBasedAgent(ABC):
         return rollout_and_evaluate
 
     @staticmethod
-    def _wrap_deterministic_reward(reward_fn):
-        """Convenience function which wraps a deterministic reward function in another function
-        that can take in rng_key as an additional argument.
-        Use when passing deterministic reward functions to create_rollout_evaluator.
+    def _wrap_basic_reward(reward_fn):
+        """Convenience function which wraps a basic reward function in another function
+        that is compatible with create_rollout_evaluator.
         """
-        return lambda observation, action, next_observation, _rng_key: reward_fn(observation, action, next_observation)
+        return lambda observation, action, next_observation, _rollout_policy_params, _dynamics_params, _rng_key: \
+            reward_fn(observation, action, next_observation)
