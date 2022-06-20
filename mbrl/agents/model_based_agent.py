@@ -196,6 +196,7 @@ class DeepModelBasedAgent(ABC):
         rollout_horizon: int,
         fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, Dict, Dict, jax.random.KeyArray],
                                    jnp.ndarray],
+        discount_factor: float = 1.0
     ):
         """Helper method that creates evaluators using the model to roll out policies.
         Created so that the rollout_policy parameters are JAX vmap-able.
@@ -209,6 +210,8 @@ class DeepModelBasedAgent(ABC):
                 that will be accumulated over the rollout for trajectory evaluation.
                 For example, setting this to self.reward_fn will return an evaluator that computes the rollout return.
                 rng_key is provided to allow for random functions (e.g. entropy bonus estimated from samples)
+            discount_factor: Discount factor used for computing returns.
+                Defaults to 1.0 (i.e. no discount).
 
         Returns:
             Policy evaluator which, given (rollout policy params, dynamics parameters, start_obs, JAX RNG key),
@@ -257,7 +260,7 @@ class DeepModelBasedAgent(ABC):
                 )
 
                 r_key, s_key = jax.random.split(r_key)
-                cur_return += jax.vmap(fn_to_accumulate, (0, 0, 0, None, None, 0))(
+                cur_return += (discount_factor ** i) * jax.vmap(fn_to_accumulate, (0, 0, 0, None, None, 0))(
                     cur_obs,
                     actions,
                     predicted_next_obs,
