@@ -151,7 +151,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         @jax.jit
         def perform_policy_update(policy_params, dynamics_params, policy_optimizer_state, batch_start, rng_key):
             def mean_batch_cost_to_go(*args):
-                return -jnp.mean(jax.vmap(multiple_particle_evaluator, (None, None, 0, 0))(*args)[1])
+                return -jnp.mean(jax.vmap(multiple_particle_evaluator, (None, None, 0, 0))(*args))
 
             batch_grad = jax.grad(mean_batch_cost_to_go)(
                 policy_params, dynamics_params, batch_start, jax.random.split(rng_key, num=batch_start.shape[0])

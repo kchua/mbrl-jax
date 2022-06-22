@@ -70,7 +70,7 @@ CONFIG = {
         },
         "policy_training": {
             "plan_horizon": 20,
-            "n_particles": 1,
+            "n_particles": 30,
             "policy_optimizer": optax.adamw(1e-3),
             "n_policy_train_steps": 2000,
             "policy_train_batch_size": 32
