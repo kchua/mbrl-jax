@@ -15,16 +15,18 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
     def __init__(
         self,
         env: MujocoEnv,
+        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         dynamics_model: NeuralNetDynamicsModel,
         ensemble_size: int,
         dynamics_optimizer: optax.GradientTransformation,
+        n_model_train_steps: int,
+        model_train_batch_size: int,
         n_model_eval_points: int,
-        plan_horizon: int,
-        n_particles: int,
-        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
         n_candidates: int,
         n_elites: int,
+        plan_horizon: int,
+        n_particles: int,
         cem_epsilon: float,
         max_cem_iters: int,
         *_args, **_kwargs
@@ -35,30 +37,39 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
 
         Args:
             env: Environment within which agent will be acting, used for inferring shapes.
+            reward_fn: Reward function defined on (observation, action, next_observation).
             dynamics_model: Dynamics model to be used by the agent.
             ensemble_size: Number of models to train for ensemble.
             dynamics_optimizer: Optimizer to use for training the dynamics model.
+            n_model_train_steps: Number of parameter updates to perform for the model.
+            model_train_batch_size: Size of batches to use for each parameter update for the model.
             n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
-            plan_horizon: Planning horizon to use.
-            n_particles: Number of independent particles to use for evaluating each action sequence.
-            reward_fn: Reward function defined on (observation, action, next_observation).
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
             n_candidates: Number of action sequence candidates for every iteration of CEM.
             n_elites: Number of elite action sequences used to update the CEM proposal distribution.
+            plan_horizon: Planning horizon to use.
+            n_particles: Number of independent particles to use for evaluating each action sequence.
             cem_epsilon: If the proposal distribution stddev drops below this, terminates CEM optimization.
             max_cem_iters: Maximum number of CEM iterations before forced termination.
         """
         super().__init__(
             env,
-            dynamics_model, ensemble_size, dynamics_optimizer,
-            n_model_eval_points, plan_horizon, n_particles,
-            reward_fn, rng_key,
+            reward_fn,
+            dynamics_model,
+            ensemble_size,
+            dynamics_optimizer,
+            n_model_train_steps,
+            model_train_batch_size,
+            n_model_eval_points,
+            rng_key
         )
 
         self._action_bounds = (env.action_space.low, env.action_space.high)
         self._action_dim = env.action_space.shape[0]
         self._n_candidates = n_candidates
         self._n_elites = n_elites
+        self._plan_horizon = plan_horizon
+        self._n_particles = n_particles
         self._cem_epsilon = cem_epsilon
         self._max_cem_iters = max_cem_iters
 
@@ -110,8 +121,14 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             fn_to_accumulate=self._wrap_basic_reward(self._reward_fn)
         )
 
+        def multiple_particle_evaluator(action_seq, dynamics_params, start_obs, rng_key):
+            particle_returns = jax.vmap(rollout_and_evaluate, (None, None, None, 0))(
+                action_seq, dynamics_params, start_obs, jax.random.split(rng_key, num=self._n_particles)
+            )["rollout_return"]
+            return jnp.mean(particle_returns)
+
         @jax.jit
-        def cross_entropy_method_update(params, cur_obs, proposal_dist, rng_key):
+        def cross_entropy_method_update(dynamics_params, cur_obs, proposal_dist, rng_key):
             rng_key, subkey = jax.random.split(rng_key)
             pre_bounding_candidates = proposal_dist["mean"][None] + proposal_dist["stddev"][None] * \
                 jax.random.normal(subkey, shape=[self._n_candidates] + list(proposal_dist["mean"].shape))
@@ -119,9 +136,9 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             action_seq_candidates = self._proposal_space_to_actions(pre_bounding_candidates)
 
             rng_key, subkey = jax.random.split(rng_key)
-            candidate_evals = jax.vmap(rollout_and_evaluate, (0, None, None, 0))(
-                action_seq_candidates, params, cur_obs, jax.random.split(subkey, num=self._n_candidates)
-            )[1]
+            candidate_evals = jax.vmap(multiple_particle_evaluator, (0, None, None, 0))(
+                action_seq_candidates, dynamics_params, cur_obs, jax.random.split(subkey, num=self._n_candidates)
+            )
 
             sorting_idxs = jnp.argsort(candidate_evals)
             elite_candidates = pre_bounding_candidates[sorting_idxs[-self._n_elites:]]

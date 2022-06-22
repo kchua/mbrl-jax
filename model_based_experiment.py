@@ -35,39 +35,43 @@ CONFIG = {
     "MujocoCartpole-v0": {
         "discount_factor": 0.99,
         "env_args": {},
-        "dynamics": {
-            "hidden_dims": [50, 50, 50],
-            "hidden_activations": jax.nn.swish,
-            "is_probabilistic": True
-        },
-        "policy": {
-            "hidden_dims": [50, 50, 50],
-            "hidden_activations": jax.nn.swish,
-        },
         "preprocessing_functions": {
             "obs_preproc": lambda obs: jnp.concatenate([obs[:1], jnp.sin(obs[1:2]), jnp.cos(obs[1:2]), obs[2:]]),
             "targ_comp": lambda obs, next_obs: next_obs - obs,
             "next_obs_comp": lambda obs, pred: obs + pred
         },
-        "model_training": {
-            "n_model_train_steps": 2000,
-            "model_train_batch_size": 32
+        "reward_function": cartpole_reward,
+
+        "dynamics": {
+            "hidden_dims": [50, 50, 50],
+            "hidden_activations": jax.nn.swish,
+            "is_probabilistic": True
         },
-        "prediction": {
+        "model_training_and_evaluation": {
             "ensemble_size": 10,
             "dynamics_optimizer": optax.adamw(1e-3),
-            "n_model_eval_points": 1000,
-            "plan_horizon": 20,
-            "n_particles": 30,
+            "n_model_train_steps": 2000,
+            "model_train_batch_size": 32,
+            "n_model_eval_points": 1000
         },
-        "reward_function": cartpole_reward,
+
         "cem": {
             "n_candidates": 400,
             "n_elites": 40,
+            "plan_horizon": 20,
+            "n_particles": 30,
             "cem_epsilon": 0.05,
             "max_cem_iters": 10,
         },
+
+        "policy": {
+            "hidden_dims": [50, 50, 50],
+            "hidden_activations": jax.nn.swish,
+        },
         "policy_training": {
+            "plan_horizon": 20,
+            "n_particles": 1,
+            "policy_optimizer": optax.adamw(1e-3),
             "n_policy_train_steps": 2000,
             "policy_train_batch_size": 32
         }
@@ -77,35 +81,36 @@ CONFIG = {
         "env_args": {
             "exclude_current_positions_from_observation": False,    # Need access to x_pos to compute velocity
         },
-        "dynamics": {
-            "hidden_dims": [200, 200, 200],
-            "hidden_activations": jax.nn.swish,
-            "is_probabilistic": True
-        },
-        "policy": {},
         "preprocessing_functions": {
             "obs_preproc": lambda obs: jnp.concatenate([obs[1:2], jnp.sin(obs[2:3]), jnp.cos(obs[2:3]), obs[3:]]),
             "targ_comp": lambda obs, next_obs: next_obs - obs,
             "next_obs_comp": lambda obs, pred: obs + pred
         },
-        "model_training": {
-            "n_model_train_steps": 2000,
-            "model_train_batch_size": 32
+        "reward_function": halfcheetah_reward,
+
+        "dynamics": {
+            "hidden_dims": [200, 200, 200],
+            "hidden_activations": jax.nn.swish,
+            "is_probabilistic": True
         },
-        "prediction": {
+        "model_training_and_evaluation": {
+            "n_model_train_steps": 2000,
+            "model_train_batch_size": 32,
             "ensemble_size": 5,
             "dynamics_optimizer": optax.adamw(1e-3),
             "n_model_eval_points": 1000,
-            "plan_horizon": 30,
-            "n_particles": 15,
         },
-        "reward_function": halfcheetah_reward,
+
         "cem": {
             "n_candidates": 500,
             "n_elites": 50,
+            "plan_horizon": 30,
+            "n_particles": 15,
             "cem_epsilon": 0.05,
             "max_cem_iters": 5,
         },
+
+        "policy": {},
         "policy_training": {}
     }
 }
@@ -200,10 +205,10 @@ def main(
         agent = ModelPredictiveControlAgent(
             env=env,
             dynamics_model=dynamics_model,
-            **CONFIG[env_name]["prediction"],
             reward_fn=CONFIG[env_name]["reward_function"],
-            **CONFIG[env_name]["cem"],
+            **CONFIG[env_name]["model_training_and_evaluation"],
             rng_key=jax.random.PRNGKey(seed),
+            **CONFIG[env_name]["cem"],
         )
     elif agent_type == "Policy":
         policy = DeterministicPolicy(
@@ -216,11 +221,11 @@ def main(
         agent = ModelBasedPolicyAgent(
             env=env,
             dynamics_model=dynamics_model,
-            **CONFIG[env_name]["prediction"],
             reward_fn=CONFIG[env_name]["reward_function"],
+            **CONFIG[env_name]["model_training_and_evaluation"],
             rng_key=jax.random.PRNGKey(seed),
             policy=policy,
-            policy_optimizer=optax.adamw(1e-3)
+            **CONFIG[env_name]["policy_training"]
         )
     else:
         raise RuntimeError("Invalid agent type.")
@@ -231,10 +236,7 @@ def main(
 
     all_logging_statistics = None
     for iteration in range(n_iters):
-        agent.train(
-            **CONFIG[env_name]["model_training"],
-            **(CONFIG[env_name]["policy_training"] if agent_type == "Policy" else {})
-        )
+        agent.train()
 
         if logdir is not None and (iteration + 1) % save_every == 0:
             recording_path = os.path.join(logdir, "agent_rollouts/iter_{}".format(iteration + 1))

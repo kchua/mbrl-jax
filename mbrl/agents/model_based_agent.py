@@ -17,13 +17,13 @@ class DeepModelBasedAgent(ABC):
     def __init__(
         self,
         env: MujocoEnv,
+        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         dynamics_model: NeuralNetDynamicsModel,
         ensemble_size: int,
         dynamics_optimizer: optax.GradientTransformation,
+        n_model_train_steps: int,
+        model_train_batch_size: int,
         n_model_eval_points: int,
-        plan_horizon: int,
-        n_particles: int,
-        reward_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
         rng_key: jax.random.KeyArray,
         *_args, **_kwargs
     ):
@@ -31,22 +31,22 @@ class DeepModelBasedAgent(ABC):
 
         Args:
             env: Environment within which agent will be acting, used for inferring shapes.
+            reward_fn: Reward function defined on (observation, action, next_observation).
             dynamics_model: Dynamics model to be used by the agent.
             ensemble_size: Number of models to train for ensemble.
             dynamics_optimizer: Optimizer to use for training the dynamics model.
+            n_model_train_steps: Number of parameter updates to perform for the model.
+            model_train_batch_size: Size of batches to use for each parameter update for the model.
             n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
-            plan_horizon: Planning horizon to use.
-            n_particles: Number of independent particles to use for evaluating each action sequence.
-            reward_fn: Reward function defined on (observation, action, next_observation).
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
         """
+        self._reward_fn = reward_fn
         self._dynamics_model = dynamics_model
         self._ensemble_size = ensemble_size
         self._dynamics_optimizer = dynamics_optimizer
+        self._n_model_train_steps = n_model_train_steps
+        self._model_train_batch_size = model_train_batch_size
         self._n_model_eval_points = n_model_eval_points
-        self._plan_horizon = plan_horizon
-        self._n_particles = n_particles
-        self._reward_fn = reward_fn
         self._rng_key = rng_key
 
         self._dynamics_dataset = Dataset(
@@ -93,17 +93,8 @@ class DeepModelBasedAgent(ABC):
             next_observation=obs_seq[1:]
         )
 
-    def train(
-        self,
-        n_model_train_steps: int,
-        model_train_batch_size: int,
-        *_args, **_kwargs
-    ) -> None:
+    def train(self) -> None:
         """Trains the internal dynamics model of this agent with all the provided interaction data so far.
-
-        Args:
-            n_model_train_steps: Number of parameter updates to perform for the model.
-            model_train_batch_size: Size of batches to use for each parameter update for the model.
         """
         self._dynamics_model.fit_normalizer(
             self._dynamics_dataset["observation"],
@@ -115,15 +106,15 @@ class DeepModelBasedAgent(ABC):
         bootstrapped_dataset = self._dynamics_dataset.bootstrap(self._ensemble_size, subkey)
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        epoch_iterator = bootstrapped_dataset.epoch(model_train_batch_size, subkey)
-        for _ in trange(n_model_train_steps, desc="Dynamics model training", unit="batches", ncols=150):
+        epoch_iterator = bootstrapped_dataset.epoch(self._model_train_batch_size, subkey)
+        for _ in trange(self._n_model_train_steps, desc="Dynamics model training", unit="batches", ncols=150):
             while True:
                 try:
                     batches_per_member = next(epoch_iterator)
                     break
                 except StopIteration:
                     self._rng_key, subkey = jax.random.split(self._rng_key)
-                    epoch_iterator = bootstrapped_dataset.epoch(model_train_batch_size, subkey)
+                    epoch_iterator = bootstrapped_dataset.epoch(self._model_train_batch_size, subkey)
 
             self._dynamics_params, self._dynamics_optimizer_state = self._model_update_op(
                 self._dynamics_params, self._dynamics_optimizer_state, batches_per_member
@@ -236,46 +227,37 @@ class DeepModelBasedAgent(ABC):
         def rollout_and_evaluate(rollout_policy_params, dynamics_params, start_obs, rng_key):
             # Assign an ensemble member to each particle at random
             rng_key, subkey = jax.random.split(rng_key)
-            particle_to_member = jax.random.randint(
-                subkey, minval=0, maxval=self._ensemble_size, shape=[self._n_particles]
+            member = jax.random.randint(
+                subkey, minval=0, maxval=self._ensemble_size, shape=()
             )
-            params_per_particle = jax.tree_map(
-                lambda all_params: all_params[particle_to_member], dynamics_params
+            member_params = jax.tree_map(
+                lambda all_params: all_params[member], dynamics_params
             )
 
-            start_obs = jnp.repeat(start_obs[None], self._n_particles, axis=0)
-            running_return = jnp.zeros(self._n_particles)
-
-            def simulate_single_timestep(i, args):
-                cur_obs, cur_return, r_key = args
+            def simulate_single_timestep(prev_timestep_info, h):
+                cur_obs, cur_return, r_key = prev_timestep_info
 
                 r_key, s_key = jax.random.split(r_key)
-                actions = jax.vmap(rollout_policy, (None, 0, None, 0))(
-                    rollout_policy_params, cur_obs, i, jax.random.split(s_key, num=self._n_particles)
-                )
+                action = rollout_policy(rollout_policy_params, cur_obs, h, s_key)
 
                 r_key, s_key = jax.random.split(r_key)
-                predicted_next_obs = jax.vmap(self._dynamics_model.predict)(
-                    params_per_particle, cur_obs, actions, jax.random.split(s_key, num=self._n_particles)
-                )
+                next_obs = self._dynamics_model.predict(member_params, cur_obs, action, s_key)
 
                 r_key, s_key = jax.random.split(r_key)
-                cur_return += (discount_factor ** i) * jax.vmap(fn_to_accumulate, (0, 0, 0, None, None, 0))(
-                    cur_obs,
-                    actions,
-                    predicted_next_obs,
-                    rollout_policy_params,
-                    dynamics_params,
-                    jax.random.split(s_key, num=self._n_particles)
+                cur_return += (discount_factor ** h) * fn_to_accumulate(
+                    cur_obs, action, next_obs, rollout_policy_params, dynamics_params, s_key
                 )
 
-                return predicted_next_obs, cur_return, r_key
+                return (next_obs, cur_return, r_key), cur_obs
 
-            final_obs, rollout_returns, _ = jax.lax.fori_loop(
-                0, rollout_horizon, simulate_single_timestep,
-                (start_obs, running_return, rng_key)
+            (final_obs, rollout_return, _), obs_seq = jax.lax.scan(
+                simulate_single_timestep, (start_obs, 0., rng_key), jnp.arange(rollout_horizon)
             )
-            return final_obs, jnp.mean(rollout_returns)
+            return {
+                "final_observation": final_obs,
+                "rollout_return": rollout_return,
+                "observation_sequence": jnp.append(obs_seq, final_obs[None])
+            }
 
         return rollout_and_evaluate
 
