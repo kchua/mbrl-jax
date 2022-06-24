@@ -256,7 +256,7 @@ class DeepModelBasedAgent(ABC):
             return {
                 "final_observation": final_obs,
                 "rollout_return": rollout_return,
-                "observation_sequence": jnp.append(obs_seq, final_obs[None])
+                "observation_sequence": jnp.append(obs_seq, final_obs[None], axis=0)
             }
 
         return rollout_and_evaluate
