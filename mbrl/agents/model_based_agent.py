@@ -245,7 +245,7 @@ class DeepModelBasedAgent(ABC):
 
                 r_key, s_key = jax.random.split(r_key)
                 cur_return += (discount_factor ** h) * fn_to_accumulate(
-                    h, cur_obs, action, next_obs, rollout_policy_params, dynamics_params, s_key
+                    h, cur_obs, action, next_obs, rollout_policy_params, member_params, s_key
                 )
 
                 return (next_obs, cur_return, r_key), cur_obs
