@@ -179,7 +179,7 @@ class NeuralNetDynamicsModel:
             next_obs: Next environment observation.
 
         Returns:
-            log-likelihood.
+            Negative log-likelihood.
         """
         raw_output = self._compute_net_output(params, obs, action)
 

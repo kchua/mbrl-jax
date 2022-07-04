@@ -185,7 +185,7 @@ class DeepModelBasedAgent(ABC):
         self,
         rollout_policy: Callable[[Any, jnp.ndarray, int, jax.random.KeyArray], jnp.ndarray],
         rollout_horizon: int,
-        fn_to_accumulate: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, Dict, Dict, jax.random.KeyArray],
+        fn_to_accumulate: Callable[[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, Dict, Dict, jax.random.KeyArray],
                                    jnp.ndarray],
         discount_factor: float = 1.0
     ):
@@ -245,13 +245,13 @@ class DeepModelBasedAgent(ABC):
 
                 r_key, s_key = jax.random.split(r_key)
                 cur_return += (discount_factor ** h) * fn_to_accumulate(
-                    cur_obs, action, next_obs, rollout_policy_params, dynamics_params, s_key
+                    h, cur_obs, action, next_obs, rollout_policy_params, dynamics_params, s_key
                 )
 
                 return (next_obs, cur_return, r_key), cur_obs
 
             (final_obs, rollout_return, _), obs_seq = jax.lax.scan(
-                simulate_single_timestep, (start_obs, 0., rng_key), jnp.arange(rollout_horizon)
+                simulate_single_timestep, (start_obs, 0., rng_key), jnp.arange(rollout_horizon, dtype=int)
             )
             return {
                 "final_observation": final_obs,
@@ -266,5 +266,5 @@ class DeepModelBasedAgent(ABC):
         """Convenience function which wraps a basic reward function in another function
         that is compatible with create_rollout_evaluator.
         """
-        return lambda observation, action, next_observation, _rollout_policy_params, _dynamics_params, _rng_key: \
+        return lambda _, observation, action, next_observation, __, ___, ____: \
             reward_fn(observation, action, next_observation)
