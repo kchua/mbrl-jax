@@ -187,6 +187,7 @@ class DeepModelBasedAgent(ABC):
         rollout_horizon: int,
         fn_to_accumulate: Callable[[int, jnp.ndarray, jnp.ndarray, jnp.ndarray, Dict, Dict, jax.random.KeyArray],
                                    jnp.ndarray],
+        accumulator_init: Any = 0.,
         discount_factor: float = 1.0
     ):
         """Helper method that creates evaluators using the model to roll out policies.
@@ -196,11 +197,13 @@ class DeepModelBasedAgent(ABC):
             rollout_policy: A policy mapping of the form (params, obs, i, rng_key) -> action.
                 See examples below.
             rollout_horizon: Rollout horizon
-            fn_to_accumulate: A scalar-valued function on
+            fn_to_accumulate: A scalar- or pytree-valued function on
                 (observation, action, next_observation, rollout_policy_params, dynamics_params, rng_key)
                 that will be accumulated over the rollout for trajectory evaluation.
                 For example, setting this to self.reward_fn will return an evaluator that computes the rollout return.
                 rng_key is provided to allow for random functions (e.g. entropy bonus estimated from samples)
+            accumulator_init: Initial value for the accumulator.
+                Defaults to 0 for backwards compatibility, which is valid only for scalar-valued fn_to_accumulate.
             discount_factor: Discount factor used for computing returns.
                 Defaults to 1.0 (i.e. no discount).
 
@@ -244,14 +247,20 @@ class DeepModelBasedAgent(ABC):
                 next_obs = self._dynamics_model.predict(member_params, cur_obs, action, s_key)
 
                 r_key, s_key = jax.random.split(r_key)
-                cur_return += (discount_factor ** h) * fn_to_accumulate(
-                    h, cur_obs, action, next_obs, rollout_policy_params, member_params, s_key
+                cur_return = jax.tree_map(
+                    lambda x, y: x + (discount_factor ** h) * y,
+                    cur_return,
+                    fn_to_accumulate(
+                        h, cur_obs, action, next_obs, rollout_policy_params, member_params, s_key
+                    )
                 )
 
                 return (next_obs, cur_return, r_key), cur_obs
 
             (final_obs, rollout_return, _), obs_seq = jax.lax.scan(
-                simulate_single_timestep, (start_obs, 0., rng_key), jnp.arange(rollout_horizon, dtype=int)
+                simulate_single_timestep,
+                (start_obs, accumulator_init, rng_key),
+                jnp.arange(rollout_horizon, dtype=int)
             )
             return {
                 "final_observation": final_obs,
