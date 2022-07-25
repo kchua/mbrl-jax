@@ -7,6 +7,13 @@ import numpy as onp
 Array = Union[jnp.ndarray, onp.ndarray]
 
 
+def gaussian_log_prob(gaussian_params, query):
+    weighted_mse = 0.5 * jnp.sum(jnp.square((query - gaussian_params["mean"]) / gaussian_params["stddev"]))
+    log_det_cov = jnp.sum(gaussian_params["log_stddev"])
+    dim = gaussian_params["mean"].shape[0]
+    return -(weighted_mse + log_det_cov + (dim / 2) * jnp.log(2 * jnp.pi))
+
+
 def normalize(input, normalizer_params, invert=False):
     if not invert:
         return (input - normalizer_params["center"]) / normalizer_params["scale"]

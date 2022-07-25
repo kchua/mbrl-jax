@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from mbrl.misc.fully_connected_neural_net import FullyConnectedNeuralNet
-from mbrl._src.utils import Array, create_gaussianizer, normalize, reparameterized_gaussian_sampler
+from mbrl._src.utils import Array, create_gaussianizer, gaussian_log_prob, normalize, reparameterized_gaussian_sampler
 
 
 class NeuralNetDynamicsModel:
@@ -189,11 +189,11 @@ class NeuralNetDynamicsModel:
             targ = self._targ_comp(obs, next_obs)
 
         if self.is_probabilistic:
-            mse = 0.5 * jnp.sum(jnp.square((raw_output["mean"] - targ) / raw_output["stddev"]))
-            log_det_cov = jnp.sum(raw_output["log_stddev"])
-            return mse + log_det_cov
+            gaussian_params = raw_output
         else:
-            return 0.5 * jnp.sum(jnp.square(raw_output - targ))
+            gaussian_params = {"mean": raw_output, "stddev": jnp.ones_like(raw_output)}
+
+        return -gaussian_log_prob(gaussian_params, targ)
 
     def _compute_net_output(self, params, obs, action):
         preproc_obs = self._obs_preproc(obs)
