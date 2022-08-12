@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Callable
 
 from gym.envs.mujoco import MujocoEnv
@@ -100,7 +101,9 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             Action chosen by the agent
         """
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        optimized_action_seq_dist = self._cem_op(self._dynamics_params, obs, self._proposal_dist, subkey)
+        optimized_action_seq_dist = self._cem_op(
+            self._dynamics_params, self._dynamics_state, obs, self._proposal_dist, subkey
+        )
 
         next_proposal_dist_mean = jnp.concatenate([
             optimized_action_seq_dist["mean"][1:],
@@ -118,17 +121,19 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         rollout_and_evaluate = self._create_rollout_evaluator(
             rollout_policy=lambda action_seq, _obs, i, _rng_key: action_seq[i],
             rollout_horizon=self._plan_horizon,
-            fn_to_accumulate=self._wrap_basic_reward(self._reward_fn)
+            fn_to_accumulate=self._wrap_basic_reward(self._reward_fn),
+            accumulator_init=0.
         )
 
-        def multiple_particle_evaluator(action_seq, dynamics_params, start_obs, rng_key):
-            particle_returns = jax.vmap(rollout_and_evaluate, (None, None, None, 0))(
-                action_seq, dynamics_params, start_obs, jax.random.split(rng_key, num=self._n_particles)
-            )["rollout_return"]
+        def multiple_particle_evaluator(action_seq, dynamics_params, dynamics_state, start_obs, rng_key):
+            single_particle_evaluator = \
+                partial(rollout_and_evaluate, action_seq, dynamics_params, dynamics_state, start_obs)
+            particle_returns = \
+                jax.vmap(single_particle_evaluator)(jax.random.split(rng_key, num=self._n_particles))["accumulation"]
             return jnp.mean(particle_returns)
 
         @jax.jit
-        def cross_entropy_method_update(dynamics_params, cur_obs, proposal_dist, rng_key):
+        def cross_entropy_method_update(dynamics_params, dynamics_state, cur_obs, proposal_dist, rng_key):
             rng_key, subkey = jax.random.split(rng_key)
             pre_bounding_candidates = proposal_dist["mean"][None] + proposal_dist["stddev"][None] * \
                 jax.random.normal(subkey, shape=[self._n_candidates] + list(proposal_dist["mean"].shape))
@@ -136,8 +141,12 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             action_seq_candidates = self._proposal_space_to_actions(pre_bounding_candidates)
 
             rng_key, subkey = jax.random.split(rng_key)
-            candidate_evals = jax.vmap(multiple_particle_evaluator, (0, None, None, 0))(
-                action_seq_candidates, dynamics_params, cur_obs, jax.random.split(subkey, num=self._n_candidates)
+            candidate_evals = jax.vmap(multiple_particle_evaluator, (0, None, None, None, 0))(
+                action_seq_candidates,
+                dynamics_params,
+                dynamics_state,
+                cur_obs,
+                jax.random.split(subkey, num=self._n_candidates)
             )
 
             sorting_idxs = jnp.argsort(candidate_evals)
@@ -149,12 +158,12 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
 
             return updated_proposal_dist
 
-        def cross_entropy_method(dynamics_params, cur_obs, proposal_dist, rng_key):
+        def cross_entropy_method(dynamics_params, dynamics_state, cur_obs, proposal_dist, rng_key):
             n_iters = 0
             while n_iters < self._max_cem_iters and jnp.max(proposal_dist["stddev"]) > self._cem_epsilon:
                 rng_key, subkey = jax.random.split(rng_key)
                 proposal_dist = cross_entropy_method_update(
-                    dynamics_params, cur_obs, proposal_dist, subkey
+                    dynamics_params, dynamics_state, cur_obs, proposal_dist, subkey
                 )
                 n_iters += 1
             return proposal_dist

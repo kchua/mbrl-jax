@@ -4,13 +4,13 @@ import jax
 import jax.numpy as jnp
 
 from mbrl.misc.fully_connected_neural_net import FullyConnectedNeuralNet
-from mbrl._src.utils import Array, create_gaussianizer, gaussian_log_prob, normalize, reparameterized_gaussian_sampler
+from mbrl._src.utils import Array, normalize
+from mbrl._src.gaussian_utils import create_bounded_gaussianizer, gaussian_log_prob, reparameterized_gaussian_sampler
 
 
 class NeuralNetDynamicsModel:
     def __init__(
         self,
-        name: str,
         dummy_obs: Array,
         dummy_action: Array,
         hidden_dims: List[int],
@@ -27,7 +27,6 @@ class NeuralNetDynamicsModel:
         """Creates a dynamics model which internally uses a neural network with a deterministic output.
 
         Args:
-            name: Model name. Used for referencing parameters, so must be unique.
             dummy_obs: Single dummy observation used to infer shapes.
             dummy_action: Single dummy action used to infer shapes.
             hidden_dims: List of hidden dimensions for internal network.
@@ -45,7 +44,6 @@ class NeuralNetDynamicsModel:
             normalize_inputs: Indicates if input normalization will be used.
             normalize_outputs: Indicates if output normalization will be used.
         """
-        self._name = name
         self._obs_preproc = obs_preproc
         self._targ_comp = targ_comp
         self._next_obs_comp = next_obs_comp
@@ -53,28 +51,16 @@ class NeuralNetDynamicsModel:
         self._is_normalizing_inputs = normalize_inputs
         self._is_normalizing_outputs = normalize_outputs
 
-        preproc_obs_dim = self._obs_preproc(dummy_obs).shape[0]
-        action_dim = dummy_action.shape[0]
-        pred_dim = self._targ_comp(dummy_obs, dummy_obs).shape[0]
-
-        self._normalizer_params = {
-            name: {
-                "center": jnp.zeros(shape=[dim]),
-                "scale": jnp.ones(shape=[dim])
-            } for (name, dim) in [("input", preproc_obs_dim + action_dim), ("output", pred_dim)]
-        }
+        self._preproc_obs_dim = self._obs_preproc(dummy_obs).shape[0]
+        self._action_dim = dummy_action.shape[0]
+        self._pred_dim = self._targ_comp(dummy_obs, dummy_obs).shape[0]
 
         self._internal_net = FullyConnectedNeuralNet(
-            name="{}_internal".format(self._name),
-            input_dim=preproc_obs_dim + action_dim,
-            output_dim=2*pred_dim if self._is_probabilistic else pred_dim,
+            input_dim=self._preproc_obs_dim + self._action_dim,
+            output_dim=2*self._pred_dim if self._is_probabilistic else self._pred_dim,
             hidden_dims=hidden_dims,
             hidden_activations=hidden_activations,
-            output_activation=create_gaussianizer(
-                stddev_nonlinearity=jax.nn.softplus,
-                min_stddev=min_stddev,
-                max_stddev=max_stddev
-            ) if self._is_probabilistic else None
+            output_activation=create_bounded_gaussianizer(min_stddev, max_stddev) if self._is_probabilistic else None
         )
 
     @property
@@ -85,26 +71,51 @@ class NeuralNetDynamicsModel:
     def init(
         self,
         params: Dict,
+        state: Dict,
         rng_key: jax.random.KeyArray
-    ) -> Dict:
-        """Places randomly initialized net parameters within the given dictionary, which is returned.
+    ) -> (Dict, Dict):
+        """Places randomly initialized net parameters and state within the given dictionary, which is returned.
 
         Args:
-            params: Dictionary of parameters where initialization will be placed.
+            params: Dictionary where initialized model parameters will be placed.
+            state: Dictionary where model state will be placed.
             rng_key: JAX RNG key, which should not be reused outside this function.
 
         Returns:
             params
         """
-        return self._internal_net.init(params, rng_key)
+        params["internal_net"], state["internal_net"] = self._internal_net.init({}, {}, rng_key)
+        state["normalizer"] = {
+            "input": {
+                "center": jnp.zeros(shape=[self._preproc_obs_dim + self._action_dim]),
+                "scale": jnp.ones(shape=[self._preproc_obs_dim + self._action_dim]),
+            },
+            "output": {
+                "center": jnp.zeros(shape=[self._pred_dim]),
+                "scale": jnp.zeros(shape=[self._pred_dim])
+            }
+        }
+        return params, state
 
-    def fit_normalizer(self, obs, actions, next_obs) -> None:
+    def fit_normalizer(
+        self,
+        params: Dict,
+        state: Dict,
+        obs: Array,
+        actions: Array,
+        next_obs: Array
+    ) -> (Dict, Dict):
         """Fits the normalizer of this network to the given points.
 
         Args:
+            params: Dictionary of model parameters.
+            state: Dictionary of model state.
             obs: Array of observations.
             actions: Array of actions.
             next_obs: Array of next observations.
+
+        Returns:
+            Updated params and state reflecting fitted normalizer.
         """
         if obs.shape[0] != actions.shape[0] or actions.shape[0] != next_obs.shape[0]:
             raise RuntimeError("Arrays for fitting normalizer do not have matching lengths.")
@@ -113,7 +124,7 @@ class NeuralNetDynamicsModel:
             inputs = jnp.concatenate([jax.vmap(self._obs_preproc)(obs), actions], axis=-1)
             input_mean = jnp.mean(inputs, axis=0)
             input_stddev = jnp.std(inputs, axis=0)
-            self._normalizer_params["input"] = {
+            state["normalizer"]["input"] = {
                 "center": input_mean,
                 "scale": jnp.where(input_stddev > 1e-5, input_stddev, jnp.ones_like(input_stddev))
             }
@@ -122,14 +133,17 @@ class NeuralNetDynamicsModel:
             outputs = jax.vmap(self._targ_comp)(obs, next_obs)
             output_mean = jnp.mean(outputs, axis=0)
             output_stddev = jnp.std(outputs, axis=0)
-            self._normalizer_params["output"] = {
+            state["normalizer"]["output"] = {
                 "center": output_mean,
                 "scale": jnp.where(output_stddev > 1e-5, output_stddev, jnp.ones_like(output_stddev))
             }
 
+        return params, state
+
     def predict(
         self,
         params: Dict,
+        state: Dict,
         obs: Array,
         action: Array,
         rng_key=None
@@ -137,7 +151,8 @@ class NeuralNetDynamicsModel:
         """Returns the prediction of the model on a SINGLE observation and action.
 
         Args:
-            params: Dictionary of parameters.
+            params: Dictionary of model parameters.
+            state: Dictionary of model state.
             obs: Environment observation.
             action: Action.
             rng_key: JAX RNG key, only needed for probabilistic model. Do not reuse outside function.
@@ -145,7 +160,7 @@ class NeuralNetDynamicsModel:
         Returns:
             The predicted next observation according to the model.
         """
-        raw_output = self._compute_net_output(params, obs, action)
+        raw_output = self._compute_net_output(params, state, obs, action)
 
         if self._is_probabilistic:
             if rng_key is None:
@@ -155,13 +170,13 @@ class NeuralNetDynamicsModel:
         else:
             raw_prediction = raw_output
 
-        if self._is_normalizing_outputs:
-            raw_prediction = normalize(raw_prediction, self._normalizer_params["output"], invert=True)
+        raw_prediction = normalize(raw_prediction, state["normalizer"]["output"], invert=True)
         return self._next_obs_comp(obs, raw_prediction)
 
     def prediction_loss(
         self,
         params: Dict,
+        state: Dict,
         obs: Array,
         action: Array,
         next_obs: Array
@@ -173,7 +188,8 @@ class NeuralNetDynamicsModel:
         multivariate Gaussian with identity covariance.
 
         Args:
-            params: Dictionary of parameters.
+            params: Dictionary of model parameters.
+            state: Dictionary of model state.
             obs: Environment observation.
             action: Action.
             next_obs: Next environment observation.
@@ -181,10 +197,10 @@ class NeuralNetDynamicsModel:
         Returns:
             Negative log-likelihood.
         """
-        raw_output = self._compute_net_output(params, obs, action)
+        raw_output = self._compute_net_output(params, state, obs, action)
 
         if self._is_normalizing_outputs:
-            targ = normalize(self._targ_comp(obs, next_obs), self._normalizer_params["output"])
+            targ = normalize(self._targ_comp(obs, next_obs), state["normalizer"]["output"])
         else:
             targ = self._targ_comp(obs, next_obs)
 
@@ -195,12 +211,10 @@ class NeuralNetDynamicsModel:
 
         return -gaussian_log_prob(gaussian_params, targ)
 
-    def _compute_net_output(self, params, obs, action):
+    def _compute_net_output(self, params, state, obs, action):
         preproc_obs = self._obs_preproc(obs)
-        if self._is_normalizing_inputs:
-            return self._internal_net.forward(
-                params,
-                normalize(jnp.concatenate([preproc_obs, action]), self._normalizer_params["input"])
-            )
-        else:
-            return self._internal_net.forward(params, jnp.concatenate([preproc_obs, action]))
+        return self._internal_net.forward(
+            params["internal_net"],
+            state["internal_net"],
+            normalize(jnp.concatenate([preproc_obs, action]), state["normalizer"]["input"])
+        )

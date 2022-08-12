@@ -11,7 +11,6 @@ from mbrl._src.utils import Array
 class DeterministicPolicy:
     def __init__(
         self,
-        name: str,
         env: MujocoEnv,
         dummy_obs: Array,
         hidden_dims: List[int],
@@ -21,7 +20,6 @@ class DeterministicPolicy:
         """Creates a policy network.
 
         Args:
-            name: Model name. Used for referencing parameters, so must be unique.
             env: Environment. Used for inferring shapes and action bounds.
             dummy_obs: Observation from the environment, used for inferring shapes.
             hidden_dims: List of hidden dimensions for internal network.
@@ -30,7 +28,6 @@ class DeterministicPolicy:
             obs_preproc: Preprocesses observations before feeding into the network.
                 Defaults to identity operation.
         """
-        self._name = name
         self._action_bounds = (env.action_space.low, env.action_space.high)
         self._obs_preproc = obs_preproc
 
@@ -43,7 +40,6 @@ class DeterministicPolicy:
             return box_center + box_width * jnp.tanh(query)
 
         self._internal_net = FullyConnectedNeuralNet(
-            name="{}_internal".format(self._name),
             input_dim=preproc_obs_dim,
             output_dim=action_dim,
             hidden_dims=hidden_dims,
@@ -54,22 +50,25 @@ class DeterministicPolicy:
     def init(
         self,
         params: Dict,
+        state: Dict,
         rng_key: jax.random.KeyArray
     ) -> Dict:
         """Randomly initializes policy parameters, places them within the given parameter dictionary, and returns it.
 
         Args:
-            params: Dictionary of parameters where initialization will be placed.
+            params: Dictionary where initialization parameters will be placed.
+            state: Dictionary where policy network state will be placed.
             rng_key: JAX RNG key, which should not be reused outside this function.
 
         Returns:
             params
         """
-        return self._internal_net.init(params, rng_key)
+        return self._internal_net.init(params, state, rng_key)
 
     def act(
         self,
         params: Dict,
+        state: Dict,
         obs: Array,
         _rng_key=None
     ) -> jnp.ndarray:
@@ -83,4 +82,4 @@ class DeterministicPolicy:
         Returns:
             The action taken by the policy on the given observation.
         """
-        return self._internal_net.forward(params, self._obs_preproc(obs))
+        return self._internal_net.forward(params, state, self._obs_preproc(obs))

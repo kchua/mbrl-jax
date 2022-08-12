@@ -23,3 +23,14 @@ class MujocoCartpoleEnv(InvertedPendulumEnv):
         action_cost = 0.01 * np.sum(np.square(a))
         done = not np.isfinite(ob).all()
         return ob, pos_reward - action_cost, done, {}
+
+    def reset_model(self):
+        qpos = self.init_qpos + self.np_random.uniform(
+            size=self.model.nq, low=-0.01, high=0.01
+        )
+        qpos[1] += np.pi  # start from the bottom.
+        qvel = self.init_qvel + self.np_random.uniform(
+            size=self.model.nv, low=-0.01, high=0.01
+        )
+        self.set_state(qpos, qvel)
+        return self._get_obs()

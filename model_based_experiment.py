@@ -71,7 +71,7 @@ CONFIG = {
         "policy_training": {
             "plan_horizon": 20,
             "n_particles": 30,
-            "policy_optimizer": optax.adamw(1e-3),
+            "policy_optimizer": optax.adamw(1e-4),
             "n_policy_train_steps": 2000,
             "policy_train_batch_size": 32
         }
@@ -173,6 +173,7 @@ def main(
     logdir=None,
     save_every=1,
     keep_all_checkpoints=False,
+    n_init_trajs=1,
     n_iters=100,
     seed=0
 ):
@@ -194,7 +195,6 @@ def main(
         )
 
     dynamics_model = NeuralNetDynamicsModel(
-        name="dynamics_model",
         dummy_obs=env.reset(),
         dummy_action=env.action_space.sample(),
         **CONFIG[env_name]["dynamics"],
@@ -212,7 +212,6 @@ def main(
         )
     elif agent_type == "Policy":
         policy = DeterministicPolicy(
-            name="policy",
             env=env,
             dummy_obs=env.reset(),
             **CONFIG[env_name]["policy"],
@@ -230,7 +229,7 @@ def main(
     else:
         raise RuntimeError("Invalid agent type.")
 
-    for _ in trange(1, ncols=150, desc="Collecting initial trajectories"):
+    for _ in trange(n_init_trajs, ncols=150, desc="Collecting initial trajectories"):
         observations, actions, _ = rollout(env, CONFIG[env_name]["discount_factor"])
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
@@ -289,6 +288,8 @@ if __name__ == "__main__":
                         help="How often agent checkpoints and videos will be saved.")
     parser.add_argument("--keep-all-checkpoints", action="store_true",
                         help="If provided, keeps all checkpoints (rather than only the most recent one).")
+    parser.add_argument("--n-init-trajs", type=int, default=1,
+                        help="Number of initial trajectories collected with random actions.")
     parser.add_argument("--iters", type=int, default=100,
                         help="Number of training iterations.")
     parser.add_argument("-s", type=int, default=-1,
@@ -305,6 +306,7 @@ if __name__ == "__main__":
         logdir=args.logdir,
         save_every=args.save_every,
         keep_all_checkpoints=args.keep_all_checkpoints,
+        n_init_trajs=args.n_init_trajs,
         n_iters=args.iters,
         seed=args.s if args.s != -1 else onp.random.randint(10000)
     )

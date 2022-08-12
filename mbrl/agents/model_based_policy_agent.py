@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Callable
 
 from gym.envs.mujoco import MujocoEnv
@@ -75,7 +76,7 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
         self._policy_dataset = Dataset(observation=env.observation_space.shape)
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        self._policy_params = self._policy.init({}, subkey)
+        self._policy_params, self._policy_state = self._policy.init({}, {}, subkey)
 
         self._policy_optimizer_state = self._policy_optimizer.init(self._policy_params)
         self._policy_update_op = self._create_policy_update_op()
@@ -114,8 +115,12 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
                     epoch_iterator = self._policy_dataset.epoch(self._policy_train_batch_size, subkey)
 
             self._rng_key, subkey = jax.random.split(self._rng_key)
-            self._policy_params, self._policy_optimizer_state = self._policy_update_op(
-                self._policy_params, self._dynamics_params, self._policy_optimizer_state,
+            self._policy_params, self._policy_state, self._policy_optimizer_state = self._policy_update_op(
+                self._policy_params,
+                self._policy_state,
+                self._dynamics_params,
+                self._dynamics_state,
+                self._policy_optimizer_state,
                 batch_obs,
                 subkey
             )
@@ -133,31 +138,63 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
             Action chosen by the agent
         """
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        return onp.array(self._policy.act(self._policy_params, obs, subkey))
+        return onp.array(self._policy.act(self._policy_params, self._policy_state, obs, subkey))
 
     def _create_policy_update_op(self):
+        def rollout_policy(policy_params_and_state, obs, _timestep, rng_key):
+            policy_params = policy_params_and_state["params"]
+            policy_state = policy_params_and_state["state"]
+            return self._policy.act(policy_params, policy_state, obs, rng_key)
+
         rollout_and_evaluate = self._create_rollout_evaluator(
-            rollout_policy=lambda policy_params, obs, _i, rng_key: self._policy.act(policy_params, obs, rng_key),
+            rollout_policy=rollout_policy,
             rollout_horizon=self._plan_horizon,
-            fn_to_accumulate=self._wrap_basic_reward(self._reward_fn)
+            fn_to_accumulate=self._wrap_basic_reward(self._reward_fn),
+            accumulator_init=0.
         )
 
-        def multiple_particle_evaluator(policy_params, dynamics_params, start_obs, rng_key):
-            particle_returns = jax.vmap(rollout_and_evaluate, (None, None, None, 0))(
-                policy_params, dynamics_params, start_obs, jax.random.split(rng_key, num=self._n_particles)
-            )["rollout_return"]
+        def multiple_particle_evaluator(
+            policy_params,
+            policy_state,
+            dynamics_params,
+            dynamics_state,
+            start_obs,
+            rng_key
+        ):
+            policy_params_and_state = {
+                "params": policy_params,
+                "state": policy_state
+            }
+            single_particle_evaluator = partial(
+                rollout_and_evaluate, policy_params_and_state, dynamics_params, dynamics_state, start_obs
+            )
+            particle_returns = \
+                jax.vmap(single_particle_evaluator)(jax.random.split(rng_key, num=self._n_particles))["accumulation"]
             return jnp.mean(particle_returns)
 
         @jax.jit
-        def perform_policy_update(policy_params, dynamics_params, policy_optimizer_state, batch_start, rng_key):
+        def perform_policy_update(
+            policy_params,
+            policy_state,
+            dynamics_params,
+            dynamics_state,
+            policy_optimizer_state,
+            batch_start,
+            rng_key
+        ):
             def mean_batch_cost_to_go(*args):
-                return -jnp.mean(jax.vmap(multiple_particle_evaluator, (None, None, 0, 0))(*args))
+                return -jnp.mean(jax.vmap(multiple_particle_evaluator, (None, None, None, None, 0, 0))(*args))
 
             batch_grad = jax.grad(mean_batch_cost_to_go)(
-                policy_params, dynamics_params, batch_start, jax.random.split(rng_key, num=batch_start.shape[0])
+                policy_params,
+                policy_state,
+                dynamics_params,
+                dynamics_state,
+                batch_start,
+                jax.random.split(rng_key, num=len(batch_start))
             )
             updates, policy_optimizer_state = \
                 self._policy_optimizer.update(batch_grad, policy_optimizer_state, policy_params)
-            return optax.apply_updates(policy_params, updates), policy_optimizer_state
+            return optax.apply_updates(policy_params, updates), policy_state, policy_optimizer_state
 
         return perform_policy_update
