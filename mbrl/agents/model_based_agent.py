@@ -98,17 +98,16 @@ class DeepModelBasedAgent(ABC):
     def train(self) -> None:
         """Trains the internal dynamics model of this agent with all the provided interaction data so far.
         """
-        self._dynamics_params, self._dynamics_state = \
-            jax.vmap(self._dynamics_model.fit_normalizer, (0, 0, None, None, None))(
-                self._dynamics_params,
-                self._dynamics_state,
-                self._dynamics_dataset["observation"],
-                self._dynamics_dataset["action"],
-                self._dynamics_dataset["next_observation"]
-            )
-
         self._rng_key, subkey = jax.random.split(self._rng_key)
         bootstrapped_dataset = self._dynamics_dataset.bootstrap(self._ensemble_size, subkey)
+
+        self._dynamics_params, self._dynamics_state = jax.vmap(self._dynamics_model.fit_normalizer)(
+            self._dynamics_params,
+            self._dynamics_state,
+            bootstrapped_dataset["observation"],
+            bootstrapped_dataset["action"],
+            bootstrapped_dataset["next_observation"]
+        )
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
         epoch_iterator = bootstrapped_dataset.epoch(self._model_train_batch_size, subkey)

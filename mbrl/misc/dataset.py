@@ -110,6 +110,14 @@ class Dataset:
             else:
                 self._bootstrap_idxs = jnp.arange(len(dataset))[None]
 
+        def __len__(self):
+            """Returns the number of points in each bootstrap."""
+            return len(self._dataset)
+
+        def __getitem__(self, key) -> jnp.ndarray:
+            """Returns a named component in the dataset, if it exists."""
+            return self._dataset[key][self._bootstrap_idxs]
+
         def epoch(self, batch_size, rng_key, full_batch_required=True):
             return Dataset._DatasetIterator(
                 self._dataset, batch_size, rng_key,

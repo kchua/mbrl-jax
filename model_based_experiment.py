@@ -69,7 +69,7 @@ CONFIG = {
             "hidden_activations": jax.nn.swish,
         },
         "policy_training": {
-            "plan_horizon": 20,
+            "plan_horizon": 30,
             "n_particles": 30,
             "policy_optimizer": optax.adamw(1e-4),
             "n_policy_train_steps": 2000,
