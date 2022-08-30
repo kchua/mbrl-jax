@@ -137,7 +137,6 @@ class Dataset:
     class _DatasetIterator:
         def __init__(self, dataset, batch_size, rng_key, idxs=None, full_batch_required=True):
             self._dataset: Dataset = dataset
-            self._dataset_length = len(dataset)
             self._batch_size = batch_size
             self._epoch_steps = 0
             self._rng_key = rng_key
@@ -159,13 +158,13 @@ class Dataset:
             return self
 
         def __next__(self):
-            if self._full_batch_required and self._batch_size * (self._epoch_steps + 1) > self._dataset_length:
+            if self._full_batch_required and self._batch_size * (self._epoch_steps + 1) > self._idxs.shape[-1]:
                 raise StopIteration("Not enough data left for a full batch.")
-            if self._batch_size * self._epoch_steps >= self._dataset_length:
+            if self._batch_size * self._epoch_steps >= self._idxs.shape[-1]:
                 raise StopIteration("Reached end of dataset.")
 
             batch_start = self._epoch_steps * self._batch_size
-            batch_end = min(batch_start + self._batch_size, self._dataset_length)
+            batch_end = min(batch_start + self._batch_size, self._idxs.shape[-1])
             batch_idxs = self._idxs[..., batch_start:batch_end]
             self._epoch_steps += 1
 

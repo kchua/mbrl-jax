@@ -170,7 +170,7 @@ class NeuralNetDynamicsModel:
         else:
             raw_prediction = raw_output
 
-        raw_prediction = normalize(raw_prediction, state["normalizer"]["output"], invert=True)
+        raw_prediction = normalize(state["normalizer"]["output"], raw_prediction, invert=True)
         return self._next_obs_comp(obs, raw_prediction)
 
     def prediction_loss(
@@ -200,7 +200,7 @@ class NeuralNetDynamicsModel:
         raw_output = self._compute_net_output(params, state, obs, action)
 
         if self._is_normalizing_outputs:
-            targ = normalize(self._targ_comp(obs, next_obs), state["normalizer"]["output"])
+            targ = normalize(state["normalizer"]["output"], self._targ_comp(obs, next_obs))
         else:
             targ = self._targ_comp(obs, next_obs)
 
@@ -216,5 +216,5 @@ class NeuralNetDynamicsModel:
         return self._internal_net.forward(
             params["internal_net"],
             state["internal_net"],
-            normalize(jnp.concatenate([preproc_obs, action]), state["normalizer"]["input"])
+            normalize(state["normalizer"]["input"], jnp.concatenate([preproc_obs, action]))
         )

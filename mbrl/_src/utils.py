@@ -6,8 +6,8 @@ import numpy as onp
 Array = Union[jnp.ndarray, onp.ndarray]
 
 
-def normalize(input, normalizer_params, invert=False):
+def normalize(normalizer_params, query, invert=False):
     if not invert:
-        return (input - normalizer_params["center"]) / normalizer_params["scale"]
+        return (query - normalizer_params["center"]) / normalizer_params["scale"]
     else:
-        return input * normalizer_params["scale"] + normalizer_params["center"]
+        return query * normalizer_params["scale"] + normalizer_params["center"]
