@@ -1,14 +1,20 @@
-from typing import Iterable
+from typing import Iterable, Optional
 
 import jax
 import jax.numpy as jnp
 
 
 class Dataset:
-    def __init__(self, **kwargs: Iterable[int]):
+    def __init__(
+        self,
+        max_length: Optional[int] = None,
+        **kwargs: Iterable[int]
+    ):
         """Creates a dataset with named components.
 
         Args:
+            max_length: Optional argument specifying the largest size allowed for this dataset. Points are dropped
+                in order to enforce this constraint, with the oldest points being dropped first.
             **kwargs: Dictionary mapping from a named component to expected shape.
 
         >>> # Creates a dataset for a regression task with inputs in R^10 and outputs in R
@@ -17,11 +23,10 @@ class Dataset:
         >>> Dataset(inputs=(256, 256), outputs=())
         """
         self._dataset = {}
-        self._names = []
         self._length = 0
+        self._max_length = max_length
 
         for name, shape in kwargs.items():
-            self._names.append(name)
             self._dataset[name] = jnp.zeros([0] + list(shape))
 
     def __len__(self):
@@ -40,12 +45,12 @@ class Dataset:
                 List of named components provided must match that provided at construction time,
                 and the lists associated with each named component must all be of equal length.
         """
-        if len(kwargs) != len(self._names):
+        if len(kwargs) != len(self._dataset.keys()):
             raise RuntimeError("Number of named components during add() does not match "
                                "dataset at construction time.")
 
         n_elems_to_add = None
-        for name in self._names:
+        for name in self._dataset:
             if name not in kwargs:
                 raise RuntimeError("Cannot add to dataset without specifying "
                                    "all named components provided during dataset construction.")
@@ -60,9 +65,13 @@ class Dataset:
             if kwargs[name].shape[1:] != self._dataset[name].shape[1:]:
                 raise RuntimeError("Invalid shape for {} provided when adding to dataset.".format(name))
 
-        self._length += n_elems_to_add
-        for name in self._names:
-            self._dataset[name] = jnp.concatenate([self._dataset[name], kwargs[name]])
+        if self._max_length is None:
+            self._length += n_elems_to_add
+        else:
+            self._length = min(self._length + n_elems_to_add, self._max_length)
+
+        for name in self._dataset:
+            self._dataset[name] = jnp.concatenate([self._dataset[name], kwargs[name]])[-self._length:]
 
     def bootstrap(
         self,
