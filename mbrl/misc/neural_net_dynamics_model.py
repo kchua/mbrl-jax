@@ -1,10 +1,10 @@
-from typing import Callable, Dict, List, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import jax
 import jax.numpy as jnp
 
 from mbrl.misc.fully_connected_neural_net import FullyConnectedNeuralNet
-from mbrl._src.utils import Array, normalize
+from mbrl._src.utils import Array, denormalize, normalize
 from mbrl._src.gaussian_utils import create_bounded_gaussianizer, gaussian_log_prob, reparameterized_gaussian_sampler
 
 
@@ -14,7 +14,7 @@ class NeuralNetDynamicsModel:
         dummy_obs: Array,
         dummy_action: Array,
         hidden_dims: List[int],
-        hidden_activations: Union[None, Callable[[Array], Array], List[Union[None, Callable[[Array], Array]]]],
+        hidden_activations: Optional[Union[Callable[[Array], Array], List[Optional[Callable[[Array], Array]]]]],
         is_probabilistic: bool,
         min_stddev: float = 1e-5,
         max_stddev: float = 100.,
@@ -51,9 +51,9 @@ class NeuralNetDynamicsModel:
         self._is_normalizing_inputs = normalize_inputs
         self._is_normalizing_outputs = normalize_outputs
 
-        self._preproc_obs_dim = self._obs_preproc(dummy_obs).shape[0]
-        self._action_dim = dummy_action.shape[0]
-        self._pred_dim = self._targ_comp(dummy_obs, dummy_obs).shape[0]
+        self._preproc_obs_dim = self._obs_preproc(dummy_obs).size
+        self._action_dim = dummy_action.size
+        self._pred_dim = self._targ_comp(dummy_obs, dummy_obs).size
 
         self._internal_net = FullyConnectedNeuralNet(
             input_dim=self._preproc_obs_dim + self._action_dim,
@@ -92,7 +92,7 @@ class NeuralNetDynamicsModel:
             },
             "output": {
                 "center": jnp.zeros(shape=[self._pred_dim]),
-                "scale": jnp.zeros(shape=[self._pred_dim])
+                "scale": jnp.ones(shape=[self._pred_dim])
             }
         }
         return params, state
@@ -121,7 +121,7 @@ class NeuralNetDynamicsModel:
             raise RuntimeError("Arrays for fitting normalizer do not have matching lengths.")
 
         if self._is_normalizing_inputs:
-            inputs = jnp.concatenate([jax.vmap(self._obs_preproc)(obs), actions], axis=-1)
+            inputs = jax.vmap(self._compute_unnormalized_net_input)(obs, actions)
             input_mean = jnp.mean(inputs, axis=0)
             input_stddev = jnp.std(inputs, axis=0)
             state["normalizer"]["input"] = {
@@ -170,7 +170,7 @@ class NeuralNetDynamicsModel:
         else:
             raw_prediction = raw_output
 
-        raw_prediction = normalize(state["normalizer"]["output"], raw_prediction, invert=True)
+        raw_prediction = denormalize(state["normalizer"]["output"], raw_prediction)
         return self._next_obs_comp(obs, raw_prediction)
 
     def prediction_loss(
@@ -182,7 +182,7 @@ class NeuralNetDynamicsModel:
         next_obs: Array
     ) -> jnp.ndarray:
         """Computes the negative log-likelihood of the target induced by (obs, next_obs) with respect to the model,
-        conditioned on (obs, action), up to additive constants.
+        conditioned on (obs, action).
 
         Note: For deterministic models, the log-likelihood is computed as if the network output is the mean of a
         multivariate Gaussian with identity covariance.
@@ -198,23 +198,23 @@ class NeuralNetDynamicsModel:
             Negative log-likelihood.
         """
         raw_output = self._compute_net_output(params, state, obs, action)
-
-        if self._is_normalizing_outputs:
-            targ = normalize(state["normalizer"]["output"], self._targ_comp(obs, next_obs))
-        else:
-            targ = self._targ_comp(obs, next_obs)
+        targ = normalize(state["normalizer"]["output"], self._targ_comp(obs, next_obs))
 
         if self.is_probabilistic:
             gaussian_params = raw_output
         else:
-            gaussian_params = {"mean": raw_output, "stddev": jnp.ones_like(raw_output)}
+            gaussian_params = {"mean": raw_output, "stddev": 1.}
 
         return -gaussian_log_prob(gaussian_params, targ)
 
     def _compute_net_output(self, params, state, obs, action):
-        preproc_obs = self._obs_preproc(obs)
+        unnormalized_net_input = self._compute_unnormalized_net_input(obs, action)
         return self._internal_net.forward(
             params["internal_net"],
             state["internal_net"],
-            normalize(state["normalizer"]["input"], jnp.concatenate([preproc_obs, action]))
+            normalize(state["normalizer"]["input"], unnormalized_net_input)
         )
+
+    def _compute_unnormalized_net_input(self, obs, action):
+        preproc_obs = self._obs_preproc(obs)
+        return jnp.concatenate([preproc_obs, action])
