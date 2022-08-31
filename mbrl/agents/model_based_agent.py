@@ -24,7 +24,6 @@ class DeepModelBasedAgent(ABC):
         dynamics_optimizer: optax.GradientTransformation,
         n_model_train_steps: int,
         model_train_batch_size: int,
-        n_model_eval_points: int,
         rng_key: jax.random.KeyArray,
         *_args, **_kwargs
     ):
@@ -38,7 +37,6 @@ class DeepModelBasedAgent(ABC):
             dynamics_optimizer: Optimizer to use for training the dynamics model.
             n_model_train_steps: Number of parameter updates to perform for the model.
             model_train_batch_size: Size of batches to use for each parameter update for the model.
-            n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
         """
         self._reward_fn = reward_fn
@@ -47,7 +45,6 @@ class DeepModelBasedAgent(ABC):
         self._dynamics_optimizer = dynamics_optimizer
         self._n_model_train_steps = n_model_train_steps
         self._model_train_batch_size = model_train_batch_size
-        self._n_model_eval_points = n_model_eval_points
         self._rng_key = rng_key
 
         self._dynamics_dataset = Dataset(
@@ -56,14 +53,10 @@ class DeepModelBasedAgent(ABC):
             next_observation=env.observation_space.shape
         )
 
-        params_per_member = [{} for _ in range(self._ensemble_size)]
-        state_per_member = [{} for _ in range(self._ensemble_size)]
-        for idx in range(self._ensemble_size):
-            self._rng_key, subkey = jax.random.split(self._rng_key)
-            params_per_member[idx], state_per_member[idx] = \
-                self._dynamics_model.init(params_per_member[idx], state_per_member[idx], subkey)
-        self._dynamics_params = jax.tree_map(lambda *a: jnp.stack(a), *params_per_member)
-        self._dynamics_state = jax.tree_map(lambda *a: jnp.stack(a), *state_per_member)
+        self._rng_key, subkey = jax.random.split(self._rng_key)
+        initializer = partial(self._dynamics_model.init, {}, {})
+        self._dynamics_params, self._dynamics_state = \
+            jax.vmap(initializer)(jax.random.split(subkey, num=self._ensemble_size))
 
         self._dynamics_optimizer_state = self._dynamics_optimizer.init(self._dynamics_params)
         self._model_update_op = jax.jit(self._update_model)
@@ -150,49 +143,35 @@ class DeepModelBasedAgent(ABC):
             Dictionary of named statistics to be logged.
         """
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        iterator = self._dynamics_dataset.epoch(self._n_model_eval_points, subkey, full_batch_required=False)
+
+        full_dataset_evaluations = jax.vmap(self._batch_mean_log_likelihood, (0, 0, None))(
+            self._dynamics_params,
+            self._dynamics_state,
+            {name: self._dynamics_dataset[name] for name in self._dynamics_dataset}
+        )
+
         return {
-            "Dynamics model log-likelihood": self._evaluate_model_log_likelihood(
-                self._dynamics_params, self._dynamics_state, next(iterator)
-            )
+            "Dynamics model log-likelihood": jnp.mean(full_dataset_evaluations)
         }
 
-    def _evaluate_model_log_likelihood(self, dynamics_params, dynamics_state, evaluation_batch):
-        def batch_mean_log_likelihood(single_net_params, single_net_state, batch):
-            single_net_evaluator = partial(self._dynamics_model.prediction_loss, single_net_params, single_net_state)
-            log_likelihoods = -jax.vmap(single_net_evaluator)(
-                batch["observation"], batch["action"], batch["next_observation"]
-            )
-            return jnp.mean(log_likelihoods)
-
-        ensemble_mean_likelihoods = jax.vmap(batch_mean_log_likelihood, (0, 0, None))(
-            dynamics_params, dynamics_state, evaluation_batch
-        )
-        return jnp.mean(ensemble_mean_likelihoods)
-
     def _update_model(self, dynamics_params, dynamics_state, dynamics_optimizer_state, all_member_batches):
-        def batch_mean_loss(single_net_params, single_net_state, batch):
-            single_net_evaluator = partial(self._dynamics_model.prediction_loss, single_net_params, single_net_state)
-            losses = jax.vmap(single_net_evaluator)(
-                batch["observation"], batch["action"], batch["next_observation"]
-            )
-            return jnp.mean(losses)
-
         def sum_ensemble_losses(ensemble_params, ensemble_state, ensemble_batches):
-            return jnp.sum(jax.vmap(batch_mean_loss)(ensemble_params, ensemble_state, ensemble_batches))
+            return -jnp.sum(jax.vmap(self._batch_mean_log_likelihood)(
+                ensemble_params, ensemble_state, ensemble_batches
+            ))
 
         ensemble_grads = jax.grad(sum_ensemble_losses)(dynamics_params, dynamics_state, all_member_batches)
         updates, dynamics_optimizer_state = self._dynamics_optimizer.update(
             ensemble_grads, dynamics_optimizer_state, dynamics_params
         )
-        return optax.apply_updates(dynamics_params, updates), dynamics_state, dynamics_optimizer_state
+        updated_params = optax.apply_updates(dynamics_params, updates)
+        return updated_params, dynamics_state, dynamics_optimizer_state
 
     def _create_rollout_evaluator(
         self,
-        rollout_policy: Callable[[Any, jnp.ndarray, int, jax.random.KeyArray], jnp.ndarray],
+        rollout_policy: Callable[[Dict, jnp.ndarray, int, jax.random.KeyArray], jnp.ndarray],
         rollout_horizon: int,
-        fn_to_accumulate: Callable[[Dict, Dict, Dict, Dict, jax.random.KeyArray],
-                                   Any],
+        fn_to_accumulate: Callable[[Dict, Dict, Dict, Dict, jax.random.KeyArray], Any],
         accumulator_init: Any
     ):
         """Helper method that creates evaluators using the model to roll out policies.
@@ -202,7 +181,7 @@ class DeepModelBasedAgent(ABC):
             rollout_policy: A policy mapping of the form (rollout_policy_params, obs, timestep, rng_key) -> action.
                 See examples below.
             rollout_horizon: Rollout horizon
-            fn_to_accumulate: A scalar- or pytree-valued function on
+            fn_to_accumulate: A pytree-valued function on
                 (rollout_policy_params, dynamics_params, dynamics_state, timestep_information, rng_key)
                 that will be summed over the rollout for trajectory evaluation.
                 rng_key is provided to allow for random functions (e.g. entropy bonus estimated from samples)
@@ -210,37 +189,34 @@ class DeepModelBasedAgent(ABC):
                 fn_to_accumulate.
 
         Returns:
-            Policy evaluator which, given (rollout policy params, dynamics parameters, start_obs, JAX RNG key),
-            outputs a predicted final state and the sum of fn_to_accumulate over the rollout (truncated to the given
-            horizon).
+            Policy evaluator for the set horizon which, given
+            (rollout policy params, dynamics params, dynamics state, start_obs, JAX RNG key),
+            outputs a predicted final state, the sum of fn_to_accumulate over the rollout, and predicted observation
+            and action sequences.
 
         >>> # Evaluator for length-10 action sequences (e.g. MPC/random shooting methods).
         >>> evaluator_mpc = self._create_rollout_evaluator(
-        ...     lambda action_seq, _obs, i: action_seq[i],
+        ...     lambda action_seq, _, i, __: action_seq[i],
         ...     10,
-        ...     self._wrap_basic_reward(self._reward_fn)
+        ...     self._wrap_basic_reward(self._reward_fn),
+        ...     0.
         ... )
         >>>
         >>> # Evaluator for time-independent policy over a length-50 horizon
         >>> policy: DeterministicPolicy
         >>> evaluator_policy = self._create_rollout_evaluator(
-        ...     lambda policy_params, obs, _i: policy.act(policy_params, obs),
+        ...     lambda policy_params, obs, _, __: policy.act(policy_params, obs),
         ...     50,
-        ...     self._wrap_basic_reward(self._reward_fn)
+        ...     self._wrap_basic_reward(self._reward_fn),
+        ...     0.
         ... )
         """
         def rollout_and_evaluate(rollout_policy_params, dynamics_params, dynamics_state, start_obs, rng_key):
-            # Assign an ensemble member to each particle at random
+            # Randomly select an ensemble member for this rollout
             rng_key, subkey = jax.random.split(rng_key)
-            member = jax.random.randint(
-                subkey, minval=0, maxval=self._ensemble_size, shape=()
-            )
-            member_params = jax.tree_map(
-                lambda all_params: all_params[member], dynamics_params
-            )
-            member_state = jax.tree_map(
-                lambda all_states: all_states[member], dynamics_state
-            )
+            member = jax.random.randint(subkey, minval=0, maxval=self._ensemble_size, shape=())
+            member_params = jax.tree_map(lambda all_params: all_params[member], dynamics_params)
+            member_state = jax.tree_map(lambda all_states: all_states[member], dynamics_state)
 
             def simulate_single_timestep(prev_timestep_carry, h):
                 cur_obs, cur_return, r_key = prev_timestep_carry
@@ -259,15 +235,12 @@ class DeepModelBasedAgent(ABC):
                 }
 
                 r_key, s_key = jax.random.split(r_key)
-                cur_return = jax.tree_map(
-                    lambda x, y: x + y,
-                    cur_return,
-                    fn_to_accumulate(rollout_policy_params, member_params, member_state, timestep_info, s_key)
-                )
+                summand = fn_to_accumulate(rollout_policy_params, member_params, member_state, timestep_info, s_key)
+                cur_return = jax.tree_map(lambda x, y: x + y, cur_return, summand)
 
-                return (next_obs, cur_return, r_key), cur_obs
+                return (next_obs, cur_return, r_key), (cur_obs, action)
 
-            (final_obs, accumulation, _), obs_seq = jax.lax.scan(
+            (final_obs, accumulation, _), (obs_seq, action_seq) = jax.lax.scan(
                 simulate_single_timestep,
                 (start_obs, accumulator_init, rng_key),
                 jnp.arange(rollout_horizon, dtype=int)
@@ -275,10 +248,18 @@ class DeepModelBasedAgent(ABC):
             return {
                 "final_observation": final_obs,
                 "accumulation": accumulation,
-                "observation_sequence": jnp.append(obs_seq, final_obs[None], axis=0)
+                "observation_sequence": jnp.append(obs_seq, final_obs[None], axis=0),
+                "action_sequence": action_seq
             }
 
         return rollout_and_evaluate
+
+    def _batch_mean_log_likelihood(self, net_params, net_state, batch):
+        log_likelihood_evaluator = partial(self._dynamics_model.log_likelihood, net_params, net_state)
+        log_likelihoods = jax.vmap(log_likelihood_evaluator)(
+            batch["observation"], batch["action"], batch["next_observation"]
+        )
+        return jnp.mean(log_likelihoods)
 
     @staticmethod
     def _wrap_basic_reward(reward_fn):

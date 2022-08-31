@@ -33,6 +33,10 @@ class Dataset:
         """Returns number of points added to this dataset so far."""
         return self._length
 
+    def __iter__(self):
+        """Returns an iterator over the named elements of this dataset."""
+        return self._dataset.__iter__()
+
     def __getitem__(self, key) -> jnp.ndarray:
         """Returns a named component in the dataset, if it exists."""
         return self._dataset[key]
@@ -122,6 +126,10 @@ class Dataset:
         def __len__(self):
             """Returns the number of points in each bootstrap."""
             return len(self._dataset)
+
+        def __iter__(self):
+            """Returns an iterator over the named elements of this dataset."""
+            return self._dataset.__iter__()
 
         def __getitem__(self, key) -> jnp.ndarray:
             """Returns a named component in the dataset, if it exists."""

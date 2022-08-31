@@ -22,7 +22,6 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
         dynamics_optimizer: optax.GradientTransformation,
         n_model_train_steps: int,
         model_train_batch_size: int,
-        n_model_eval_points: int,
         rng_key: jax.random.KeyArray,
         n_candidates: int,
         n_elites: int,
@@ -61,7 +60,6 @@ class ModelPredictiveControlAgent(DeepModelBasedAgent):
             dynamics_optimizer,
             n_model_train_steps,
             model_train_batch_size,
-            n_model_eval_points,
             rng_key
         )
 

@@ -173,7 +173,7 @@ class NeuralNetDynamicsModel:
         raw_prediction = denormalize(state["normalizer"]["output"], raw_prediction)
         return self._next_obs_comp(obs, raw_prediction)
 
-    def prediction_loss(
+    def log_likelihood(
         self,
         params: Dict,
         state: Dict,
@@ -181,7 +181,7 @@ class NeuralNetDynamicsModel:
         action: Array,
         next_obs: Array
     ) -> jnp.ndarray:
-        """Computes the negative log-likelihood of the target induced by (obs, next_obs) with respect to the model,
+        """Computes the log-likelihood of the target induced by (obs, next_obs) with respect to the model,
         conditioned on (obs, action).
 
         Note: For deterministic models, the log-likelihood is computed as if the network output is the mean of a
@@ -195,7 +195,7 @@ class NeuralNetDynamicsModel:
             next_obs: Next environment observation.
 
         Returns:
-            Negative log-likelihood.
+            Log-likelihood.
         """
         raw_output = self._compute_net_output(params, state, obs, action)
         targ = normalize(state["normalizer"]["output"], self._targ_comp(obs, next_obs))
@@ -205,7 +205,7 @@ class NeuralNetDynamicsModel:
         else:
             gaussian_params = {"mean": raw_output, "stddev": 1.}
 
-        return -gaussian_log_prob(gaussian_params, targ)
+        return gaussian_log_prob(gaussian_params, targ)
 
     def _compute_net_output(self, params, state, obs, action):
         unnormalized_net_input = self._compute_unnormalized_net_input(obs, action)

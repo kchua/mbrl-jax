@@ -52,7 +52,6 @@ CONFIG = {
             "dynamics_optimizer": optax.adamw(1e-3),
             "n_model_train_steps": 2000,
             "model_train_batch_size": 32,
-            "n_model_eval_points": 1000
         },
 
         "cem": {
