@@ -1,169 +1,26 @@
 import argparse
+import importlib
 import logging
 import os
 
 import dill
 import gym
-from gym.wrappers.monitoring.video_recorder import VideoRecorder
 import jax
 import jax.numpy as jnp
 import numpy as onp
-import optax
 from tqdm import trange
 
 from mbrl.agents import ModelPredictiveControlAgent, ModelBasedPolicyAgent
 from mbrl.misc import NeuralNetDynamicsModel
 from mbrl.policies import DeterministicPolicy
+from mbrl._src.utils import rollout, print_logging_statistics
 import mbrl.envs
 
 
-def cartpole_reward(obs, action, _next_obs):
-    obs_reward = jnp.exp(-jnp.sum(jnp.square(
-        jnp.array([obs[0] + 0.6 * jnp.sin(obs[1]), 0.6 * jnp.cos(obs[1])]) - jnp.array([0, 0.6])
-    )))
-    action_reward = -0.01 * jnp.sum(jnp.square(action))
-    return obs_reward + action_reward
-
-
-def halfcheetah_reward(obs, action, next_obs):
-    obs_reward = (next_obs[0] - obs[0]) / 0.05     # TODO: 0.05 is the dt of the environment, should set automatically
-    action_reward = -0.1 * jnp.sum(jnp.square(action))
-    return obs_reward + action_reward
-
-
-CONFIG = {
-    "MujocoCartpole-v0": {
-        "discount_factor": 0.99,
-        "env_args": {},
-        "preprocessing_functions": {
-            "obs_preproc": lambda obs: jnp.concatenate([obs[:1], jnp.sin(obs[1:2]), jnp.cos(obs[1:2]), obs[2:]]),
-            "targ_comp": lambda obs, next_obs: next_obs - obs,
-            "next_obs_comp": lambda obs, pred: obs + pred
-        },
-        "reward_function": cartpole_reward,
-
-        "dynamics": {
-            "hidden_dims": [50, 50, 50],
-            "hidden_activations": jax.nn.swish,
-            "is_probabilistic": True
-        },
-        "model_training_and_evaluation": {
-            "ensemble_size": 10,
-            "dynamics_optimizer": optax.adamw(1e-3),
-            "n_model_train_steps": 2000,
-            "model_train_batch_size": 32,
-        },
-
-        "cem": {
-            "n_candidates": 400,
-            "n_elites": 40,
-            "plan_horizon": 20,
-            "n_particles": 30,
-            "cem_epsilon": 0.05,
-            "max_cem_iters": 10,
-        },
-
-        "policy": {
-            "hidden_dims": [50, 50, 50],
-            "hidden_activations": jax.nn.swish,
-        },
-        "policy_training": {
-            "plan_horizon": 30,
-            "n_particles": 30,
-            "policy_optimizer": optax.adamw(1e-4),
-            "n_policy_train_steps": 2000,
-            "policy_train_batch_size": 32
-        }
-    },
-    "HalfCheetah-v3": {
-        "discount_factor": 0.99,
-        "env_args": {
-            "exclude_current_positions_from_observation": False,    # Need access to x_pos to compute velocity
-        },
-        "preprocessing_functions": {
-            "obs_preproc": lambda obs: jnp.concatenate([obs[1:2], jnp.sin(obs[2:3]), jnp.cos(obs[2:3]), obs[3:]]),
-            "targ_comp": lambda obs, next_obs: next_obs - obs,
-            "next_obs_comp": lambda obs, pred: obs + pred
-        },
-        "reward_function": halfcheetah_reward,
-
-        "dynamics": {
-            "hidden_dims": [200, 200, 200],
-            "hidden_activations": jax.nn.swish,
-            "is_probabilistic": True
-        },
-        "model_training_and_evaluation": {
-            "n_model_train_steps": 2000,
-            "model_train_batch_size": 32,
-            "ensemble_size": 5,
-            "dynamics_optimizer": optax.adamw(1e-3),
-            "n_model_eval_points": 1000,
-        },
-
-        "cem": {
-            "n_candidates": 500,
-            "n_elites": 50,
-            "plan_horizon": 30,
-            "n_particles": 15,
-            "cem_epsilon": 0.05,
-            "max_cem_iters": 5,
-        },
-
-        "policy": {},
-        "policy_training": {}
-    }
+env_to_config = {
+    "MujocoCartpole-v0": "cartpole",
+    "HalfCheetah-v3": "halfcheetah"
 }
-
-
-def rollout(env, discount_factor, agent=None, recording_path=None):
-    observations, actions = [], []
-    observations.append(env.reset())
-
-    recorder = VideoRecorder(env, base_path=recording_path, enabled=(recording_path is not None))
-    recorder.capture_frame()
-
-    rollout_return, rollout_discounted_return, cur_discount_multiplier = 0., 0., 1.
-    done = False
-    while not done:
-        if agent is None:
-            ac = env.action_space.sample()
-        else:
-            ac = agent.act(observations[-1])
-
-        ob, reward, done, _ = env.step(ac)
-        recorder.capture_frame()
-
-        rollout_return += reward
-        rollout_discounted_return += cur_discount_multiplier * reward
-        cur_discount_multiplier *= discount_factor
-
-        observations.append(ob)
-        actions.append(ac)
-
-    rollout_statistics = {
-        "Return": rollout_return,
-        "Discounted return": rollout_discounted_return
-    }
-
-    recorder.close()
-    return observations, actions, rollout_statistics
-
-
-def print_logging_statistics(iteration, logging_statistics, n_after_decimal=6):
-    max_len = len(max(logging_statistics, key=lambda x: len(x)))
-    number_length = 3 + n_after_decimal + 4
-    writeable_length = max(max_len + 1 + 1 + 1 + number_length, 30)
-    label_length = writeable_length - 3 - number_length
-
-    logging.info("#" * (1 + 1 + label_length + 1 + 1 + 1 + number_length + 1 + 1))
-    logging.info(("# {:^%d} #" % writeable_length).format("Iteration {} Statistics".format(iteration)))
-    logging.info("# " + (" " * writeable_length) + " #")
-    for stat, value in logging_statistics.items():
-        if value >= 0:
-            logging.info(("# {:>%d} :  {:.%de} #" % (label_length, n_after_decimal)).format(stat, value))
-        else:
-            logging.info(("# {:>%d} : {:.%de} #" % (label_length, n_after_decimal)).format(stat, value))
-    logging.info("#" * (1 + 1 + max_len + 1 + 1 + 1 + 3 + n_after_decimal + 4 + 1 + 1))
 
 
 def main(
@@ -176,7 +33,9 @@ def main(
     n_iters=100,
     seed=0
 ):
-    env = gym.make(env_name, **CONFIG[env_name]["env_args"])
+    config = importlib.import_module("." + env_to_config[env_name], "mbrl.config").create_config()
+
+    env = gym.make(env_name, **config["env_args"])
     env.seed(seed)
 
     logging.basicConfig(
@@ -196,40 +55,40 @@ def main(
     dynamics_model = NeuralNetDynamicsModel(
         dummy_obs=env.reset(),
         dummy_action=env.action_space.sample(),
-        **CONFIG[env_name]["dynamics"],
-        **CONFIG[env_name]["preprocessing_functions"]
+        **config["dynamics"],
+        **config["preprocessing_functions"]
     )
 
     if agent_type == "PETS":
         agent = ModelPredictiveControlAgent(
             env=env,
             dynamics_model=dynamics_model,
-            reward_fn=CONFIG[env_name]["reward_function"],
-            **CONFIG[env_name]["model_training_and_evaluation"],
+            reward_fn=config["reward_function"],
+            **config["model_training_and_evaluation"],
             rng_key=jax.random.PRNGKey(seed),
-            **CONFIG[env_name]["cem"],
+            **config["cem"],
         )
     elif agent_type == "Policy":
         policy = DeterministicPolicy(
             env=env,
             dummy_obs=env.reset(),
-            **CONFIG[env_name]["policy"],
-            obs_preproc=CONFIG[env_name]["preprocessing_functions"]["obs_preproc"]
+            **config["policy"],
+            obs_preproc=config["preprocessing_functions"]["obs_preproc"]
         )
         agent = ModelBasedPolicyAgent(
             env=env,
             dynamics_model=dynamics_model,
-            reward_fn=CONFIG[env_name]["reward_function"],
-            **CONFIG[env_name]["model_training_and_evaluation"],
+            reward_fn=config["reward_function"],
+            **config["model_training_and_evaluation"],
             rng_key=jax.random.PRNGKey(seed),
             policy=policy,
-            **CONFIG[env_name]["policy_training"]
+            **config["policy_training"]
         )
     else:
         raise RuntimeError("Invalid agent type.")
 
     for _ in trange(n_init_trajs, ncols=150, desc="Collecting initial trajectories"):
-        observations, actions, _ = rollout(env, CONFIG[env_name]["discount_factor"])
+        observations, actions, _ = rollout(env, config["discount_factor"])
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
     all_logging_statistics = None
@@ -244,7 +103,7 @@ def main(
         agent.reset()
         observations, actions, rollout_statistics = rollout(
             env,
-            CONFIG[env_name]["discount_factor"],
+            config["discount_factor"],
             agent=agent,
             recording_path=recording_path
         )
