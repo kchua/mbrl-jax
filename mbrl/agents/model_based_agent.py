@@ -145,17 +145,25 @@ class DeepModelBasedAgent(ABC):
         Returns:
             Dictionary of named statistics to be logged.
         """
-        self._rng_key, subkey = jax.random.split(self._rng_key)
-
         full_dataset_evaluations = jax.vmap(self._batch_mean_log_likelihood, (0, 0, None))(
             self._dynamics_params,
             self._dynamics_state,
             {name: self._dynamics_dataset[name] for name in self._dynamics_dataset}
         )
+        return {"Dynamics model log-likelihood": jnp.mean(full_dataset_evaluations)}
 
-        return {
-            "Dynamics model log-likelihood": jnp.mean(full_dataset_evaluations)
-        }
+    def get_miscellaneous_data(self):
+        def mean_log_likelihood_across_ensemble(obs, action, next_obs):
+            return jnp.mean(jax.vmap(self._dynamics_model.log_likelihood, (0, 0, None, None, None))(
+                self._dynamics_params, self._dynamics_state, obs, action, next_obs
+            ))
+
+        ensemble_mean_log_likelihoods = jax.vmap(mean_log_likelihood_across_ensemble)(
+            self._dynamics_dataset["observation"],
+            self._dynamics_dataset["action"],
+            self._dynamics_dataset["next_observation"]
+        )
+        return {"Dynamics model log-likelihoods": ensemble_mean_log_likelihoods}
 
     def _update_model(self, dynamics_params, dynamics_state, dynamics_optimizer_state, all_member_batches):
         def sum_ensemble_losses(ensemble_params, ensemble_state, ensemble_batches):

@@ -88,4 +88,3 @@ class FullyConnectedNeuralNet:
             return hidden
         except KeyError:
             raise RuntimeError("Missing parameters in provided parameter dictionary. Did you call init()?")
-

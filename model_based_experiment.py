@@ -92,7 +92,7 @@ def main(
         observations, actions, _ = rollout(env, config["discount_factor"])
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
-    all_logging_statistics = None
+    all_logging_statistics, all_miscellaneous_data = None, []
     for iteration in range(n_iters):
         agent.train()
 
@@ -132,6 +132,7 @@ def main(
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
         current_logging_statistics = {**agent.get_logging_statistics(), **mean_eval_statistics}
+        all_miscellaneous_data.append(agent.get_miscellaneous_data())
         print_logging_statistics(iteration + 1, current_logging_statistics)
         if all_logging_statistics is None:
             all_logging_statistics = {
@@ -156,7 +157,8 @@ def main(
                     "env": env,
                     "iteration": iteration + 1,
                     "seed": seed,
-                    "logged_statistics": all_logging_statistics
+                    "logged_statistics": all_logging_statistics,
+                    "miscellaneous_data": all_miscellaneous_data
                 }, f)
 
 
