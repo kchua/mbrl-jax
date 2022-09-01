@@ -25,7 +25,8 @@ class DeepModelBasedAgent(ABC):
         n_model_train_steps: int,
         model_train_batch_size: int,
         rng_key: jax.random.KeyArray,
-        *_args, **_kwargs
+        *_args,
+        **_kwargs
     ):
         """Creates an RL agent which uses a neural network dynamics model to solve tasks via planning.
 
@@ -120,12 +121,14 @@ class DeepModelBasedAgent(ABC):
     @abstractmethod
     def act(
         self,
-        obs: Array
+        obs: Array,
+        evaluation: bool = False
     ) -> onp.ndarray:
         """Queries the agent for its action on the given observation.
 
         Args:
             obs: The current observation.
+            evaluation: Indicates if the agent is being queried for an action in an evaluation context.
 
         Returns:
             Action chosen by the agent

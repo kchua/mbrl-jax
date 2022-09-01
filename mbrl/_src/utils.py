@@ -16,7 +16,7 @@ def denormalize(normalizer_params, query):
     return query * normalizer_params["scale"] + normalizer_params["center"]
 
 
-def rollout(env, discount_factor, agent=None, recording_path=None):
+def rollout(env, discount_factor, agent=None, recording_path=None, evaluation=False):
     observations, actions = [], []
     observations.append(env.reset())
 
@@ -29,7 +29,7 @@ def rollout(env, discount_factor, agent=None, recording_path=None):
         if agent is None:
             ac = env.action_space.sample()
         else:
-            ac = agent.act(observations[-1])
+            ac = agent.act(observations[-1], evaluation=evaluation)
 
         ob, reward, done, _ = env.step(ac)
         recorder.capture_frame()

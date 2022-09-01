@@ -126,11 +126,13 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
     def act(
         self,
         obs: Array,
+        evaluation: bool = False
     ) -> onp.ndarray:
         """Queries the agent for its action on the given observation.
 
         Args:
             obs: The current observation.
+            evaluation: Indicates if the agent is being queried for an action in an evaluation context.
 
         Returns:
             Action chosen by the agent

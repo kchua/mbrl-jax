@@ -30,6 +30,7 @@ def main(
     save_every=1,
     keep_all_checkpoints=False,
     n_init_trajs=1,
+    n_eval_runs=1,
     n_iters=100,
     seed=0
 ):
@@ -100,6 +101,27 @@ def main(
         else:
             recording_path = None
 
+        aggregate_statistics = None
+        for _ in range(n_eval_runs):
+            agent.reset()
+            _, _, rollout_statistics = rollout(
+                env,
+                config["discount_factor"],
+                agent=agent,
+                recording_path=recording_path,
+                evaluation=True
+            )
+
+            if aggregate_statistics is None:
+                aggregate_statistics = jax.tree_map(lambda x: jnp.array([x]), rollout_statistics)
+            else:
+                aggregate_statistics = jax.tree_map(
+                    lambda x, y: jnp.concatenate([x, jnp.array([y])]),
+                    aggregate_statistics,
+                    rollout_statistics
+                )
+        mean_eval_statistics = jax.tree_map(lambda x: jnp.mean(x), aggregate_statistics)
+
         agent.reset()
         observations, actions, rollout_statistics = rollout(
             env,
@@ -109,7 +131,7 @@ def main(
         )
         agent.add_interaction_data(jnp.array(observations), jnp.array(actions))
 
-        current_logging_statistics = {**agent.get_logging_statistics(), **rollout_statistics}
+        current_logging_statistics = {**agent.get_logging_statistics(), **mean_eval_statistics}
         print_logging_statistics(iteration + 1, current_logging_statistics)
         if all_logging_statistics is None:
             all_logging_statistics = {
@@ -150,6 +172,8 @@ if __name__ == "__main__":
                         help="Number of initial trajectories collected with random actions.")
     parser.add_argument("--iters", type=int, default=100,
                         help="Number of training iterations.")
+    parser.add_argument("--n-eval-runs", type=int, default=1,
+                        help="Number of rollouts used to evaluate the agent after every iteration.")
     parser.add_argument("-s", type=int, default=-1,
                         help="Random seed.")
     parser.add_argument("env", choices=["MujocoCartpole-v0", "HalfCheetah-v3"],
@@ -166,5 +190,6 @@ if __name__ == "__main__":
         keep_all_checkpoints=args.keep_all_checkpoints,
         n_init_trajs=args.n_init_trajs,
         n_iters=args.iters,
+        n_eval_runs=args.n_eval_runs,
         seed=args.s if args.s != -1 else onp.random.randint(10000)
     )
