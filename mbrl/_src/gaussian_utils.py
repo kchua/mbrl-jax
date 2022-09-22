@@ -24,6 +24,12 @@ def gaussian_log_prob(gaussian_params, query):
     return -(weighted_mse + log_det_cov + (dim / 2) * jnp.log(2 * jnp.pi))
 
 
+def gaussian_entropy(gaussian_params):
+    log_cov_term = jnp.sum(gaussian_params["log_stddev"])
+    constant = 0.5 * gaussian_params["mean"].size * (1 + jnp.log(2 * jnp.pi))
+    return log_cov_term + constant
+
+
 def create_bounded_gaussianizer(
     min_stddev: float,
     max_stddev: float,

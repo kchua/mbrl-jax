@@ -23,13 +23,13 @@ def create_config():
         "reward_function"              : cartpole_reward,
 
         "dynamics"                     : {
-            "hidden_dims"       : [50, 50, 50],
+            "hidden_dims"       : [200, 200, 200],
             "hidden_activations": jax.nn.swish,
             "is_probabilistic"  : True
         },
         "model_training_and_evaluation": {
-            "ensemble_size"         : 10,
-            "dynamics_optimizer"    : optax.adamw(1e-3),
+            "ensemble_size"         : 7,
+            "dynamics_optimizer"    : optax.adamw(1e-3, weight_decay=1e-5, eps=1e-7),
             "n_model_train_steps"   : 2000,
             "model_train_batch_size": 32,
         },
@@ -53,5 +53,31 @@ def create_config():
             "policy_optimizer"       : optax.adamw(1e-4),
             "n_policy_train_steps"   : 2000,
             "policy_train_batch_size": 32
+        },
+
+        "MBPO_policy"                  : {
+            "hidden_dims"       : [256, 256],
+            "hidden_activations": jax.nn.swish,
+            "min_stddev"        : 1e-5,
+            "max_stddev"        : 4.
+        },
+        "MBPO_critic"                  : {
+            "hidden_dims"       : [256, 256],
+            "hidden_activations": jax.nn.swish,
+        },
+        "MBPO_training"                : {
+            "discount_factor"             : 0.99,
+            "max_replay_buffer_length"    : 100 * 200,
+            "include_augmentations"       : True,
+            "augmentation_horizon"        : 1,
+            "augmentation_batch_size"     : int(1e5),
+            "augmentation_keep_epochs"    : 2,
+            "real_ratio"                  : 0.05,
+            "initial_temperature"         : 1e-2,
+            "target_smoothing_coefficient": 5e-3,
+            "sac_batch_size"              : 256,
+            "sac_optimizer"               : optax.adam(3e-4, eps=1e-7),   # optax.adamw(3e-4)
+            "n_steps_per_batch"           : 20,
+            "target_entropy"              : -1.
         }
     }

@@ -1,11 +1,12 @@
 import logging
-from typing import Union
+from typing import Callable, Union
 
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 import jax.numpy as jnp
 import numpy as onp
 
 Array = Union[jnp.ndarray, onp.ndarray]
+Activation = Callable[[Array], Array]
 
 
 def normalize(normalizer_params, query):

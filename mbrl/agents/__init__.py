@@ -1,3 +1,5 @@
-from .model_based_agent import DeepModelBasedAgent
-from .model_predictive_control_agent import ModelPredictiveControlAgent
-from .model_based_policy_agent import ModelBasedPolicyAgent
+from mbrl.agents.model_based_agent import DeepModelBasedAgent
+
+from mbrl.agents.mbpo import ModelBasedPolicyOptimization
+from mbrl.agents.model_predictive_control_agent import ModelPredictiveControlAgent
+from mbrl.agents.model_based_policy_agent import ModelBasedPolicyAgent

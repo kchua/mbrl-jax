@@ -1,11 +1,11 @@
-from typing import Callable, Dict, List, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from gym.envs.mujoco import MujocoEnv
 import jax
 import jax.numpy as jnp
 
 from mbrl.misc import FullyConnectedNeuralNet
-from mbrl._src.utils import Array
+from mbrl._src.utils import Activation, Array
 
 
 class DeterministicPolicy:
@@ -14,7 +14,7 @@ class DeterministicPolicy:
         env: MujocoEnv,
         dummy_obs: Array,
         hidden_dims: List[int],
-        hidden_activations: Union[None, Callable[[Array], Array], List[Union[None, Callable[[Array], Array]]]],
+        hidden_activations: Optional[Union[Activation, List[Optional[Activation]]]],
         obs_preproc: Callable[[Array], Array] = lambda obs: obs,
     ):
         """Creates a policy network.

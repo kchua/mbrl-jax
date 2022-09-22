@@ -10,9 +10,9 @@ import jax.numpy as jnp
 import numpy as onp
 from tqdm import trange
 
-from mbrl.agents import ModelPredictiveControlAgent, ModelBasedPolicyAgent
-from mbrl.misc import NeuralNetDynamicsModel
-from mbrl.policies import DeterministicPolicy
+from mbrl.agents import ModelPredictiveControlAgent, ModelBasedPolicyAgent, ModelBasedPolicyOptimization
+from mbrl.misc import NeuralNetDynamicsModel, QFunction
+from mbrl.policies import DeterministicPolicy, TanhGaussianPolicy
 from mbrl._src.utils import rollout, print_logging_statistics
 import mbrl.envs
 
@@ -84,6 +84,29 @@ def main(
             rng_key=jax.random.PRNGKey(seed),
             policy=policy,
             **config["policy_training"]
+        )
+    elif agent_type == "MBPO":
+        actor = TanhGaussianPolicy(
+            env=env,
+            dummy_obs=env.reset(),
+            **config["MBPO_policy"],
+            obs_preproc=config["preprocessing_functions"]["obs_preproc"]
+        )
+        critic = QFunction(
+            dummy_obs=env.reset(),
+            dummy_action=env.action_space.sample(),
+            **config["MBPO_critic"],
+            obs_preproc=config["preprocessing_functions"]["obs_preproc"]
+        )
+        agent = ModelBasedPolicyOptimization(
+            env=env,
+            dynamics_model=dynamics_model,
+            reward_fn=config["reward_function"],
+            **config["model_training_and_evaluation"],
+            rng_key=jax.random.PRNGKey(seed),
+            actor=actor,
+            critic=critic,
+            **config["MBPO_training"]
         )
     else:
         raise RuntimeError("Invalid agent type.")
@@ -180,7 +203,7 @@ if __name__ == "__main__":
                         help="Random seed.")
     parser.add_argument("env", choices=["MujocoCartpole-v0", "HalfCheetah-v3"],
                         help="Environment [MujocoCartpole-v0, HalfCheetah-v3]")
-    parser.add_argument("agent_type", choices=["PETS", "Policy"],
+    parser.add_argument("agent_type", choices=["PETS", "Policy", "MBPO"],
                         help="Agent type [PETS/Policy]")
     args = parser.parse_args()
 

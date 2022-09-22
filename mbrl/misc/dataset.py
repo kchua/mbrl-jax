@@ -77,6 +77,23 @@ class Dataset:
         for name in self._dataset:
             self._dataset[name] = jnp.concatenate([self._dataset[name], kwargs[name]])[-self._length:]
 
+    def sample(
+        self,
+        sample_size,
+        rng_key: jax.random.KeyArray
+    ):
+        """Samples a set of size sample_size uniformly with replacement from this dataset.
+
+        Args:
+            sample_size: Size of set to sample from this dataset.
+            rng_key: JAX RNG key used to sample from this dataset, do not reuse.
+
+        Returns:
+            A set of samples of size sample_size sampled uniformly with replacement.
+        """
+        idxs = jax.random.randint(rng_key, (sample_size,), 0, len(self), dtype=int)
+        return jax.tree_map(lambda x: x[idxs], self._dataset)
+
     def bootstrap(
         self,
         ensemble_size: int,

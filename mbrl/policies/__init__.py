@@ -1,1 +1,2 @@
-from mbrl.policies.deterministic_policy import DeterministicPolicy
+from mbrl.policies.deterministic import DeterministicPolicy
+from mbrl.policies.tanh_gaussian import TanhGaussianPolicy

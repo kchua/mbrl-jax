@@ -44,7 +44,6 @@ class ModelBasedPolicyAgent(DeepModelBasedAgent):
             dynamics_optimizer: Optimizer to use for training the dynamics model.
             n_model_train_steps: Number of parameter updates to perform for the model.
             model_train_batch_size: Size of batches to use for each parameter update for the model.
-            n_model_eval_points: Number of points to evaluate the trained dynamics model on for logging statistics.
             rng_key: JAX RNG key to be used by this agent internally. Do not reuse.
             policy: The neural network policy that will be used by this agent
             plan_horizon: Planning horizon to use.
